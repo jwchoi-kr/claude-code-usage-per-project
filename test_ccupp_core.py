@@ -3,6 +3,7 @@ import sys
 import json
 import shutil
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -10,25 +11,74 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ccupp_core as core
 
 
-def _assistant(rid, inp=0, cc=0, cr=0, out=0, model="claude-opus-4-7", sidechain=False, ts=None):
-    o = {
-        "type": "assistant",
-        "requestId": rid,
-        "message": {
-            "model": model,
-            "usage": {
-                "input_tokens": inp,
-                "cache_creation_input_tokens": cc,
-                "cache_read_input_tokens": cr,
-                "output_tokens": out,
-            },
-        },
+class _CcuppHomeIsolation:
+    """Mixin: redirect CCUPP_HOME to a tempdir so tests don't touch real registry/cache."""
+
+    def _isolate_home(self):
+        self._home = tempfile.mkdtemp()
+        self._prev_home = os.environ.get("CCUPP_HOME")
+        os.environ["CCUPP_HOME"] = self._home
+
+    def _restore_home(self):
+        if self._prev_home is None:
+            os.environ.pop("CCUPP_HOME", None)
+        else:
+            os.environ["CCUPP_HOME"] = self._prev_home
+        shutil.rmtree(self._home, ignore_errors=True)
+
+
+def _assistant(rid, inp=0, cc=0, cr=0, out=0, model="claude-opus-4-7",
+               sidechain=False, ts=None, mid=None, speed=None, cost_usd=None):
+    usage = {
+        "input_tokens": inp,
+        "cache_creation_input_tokens": cc,
+        "cache_read_input_tokens": cr,
+        "output_tokens": out,
     }
+    if speed is not None:
+        usage["speed"] = speed
+    msg = {"model": model, "usage": usage}
+    if mid is not None:
+        msg["id"] = mid
+    o = {"type": "assistant", "requestId": rid, "message": msg}
     if sidechain:
         o["isSidechain"] = True
     if ts:
         o["timestamp"] = ts
+    if cost_usd is not None:
+        o["costUSD"] = cost_usd
     return o
+
+
+def _price(inp_per_m, out_per_m, cc_per_m=0.0, cr_per_m=0.0,
+           inp_above=None, out_above=None, cc_above=None, cr_above=None):
+    return {
+        "input": inp_per_m / 1_000_000,
+        "output": out_per_m / 1_000_000,
+        "cache_create": cc_per_m / 1_000_000,
+        "cache_read": cr_per_m / 1_000_000,
+        "input_above_200k": (inp_above / 1_000_000) if inp_above is not None else None,
+        "output_above_200k": (out_above / 1_000_000) if out_above is not None else None,
+        "cache_create_above_200k": (cc_above / 1_000_000) if cc_above is not None else None,
+        "cache_read_above_200k": (cr_above / 1_000_000) if cr_above is not None else None,
+    }
+
+
+TEST_PRICING = {
+    "claude-opus-4-7": _price(15.0, 75.0, 18.75, 1.5),
+    "claude-sonnet-4-5": _price(3.0, 15.0, 3.75, 0.3),
+    "claude-sonnet-tiered": _price(3.0, 15.0, 3.75, 0.3,
+                                   inp_above=6.0, out_above=22.5, cc_above=7.5, cr_above=0.6),
+}
+
+
+class _PricingIsolation:
+    def _set_pricing(self, mapping=None):
+        self._prev_pricing = core._PRICING_CACHE
+        core._PRICING_CACHE = dict(mapping or TEST_PRICING)
+
+    def _restore_pricing(self):
+        core._PRICING_CACHE = self._prev_pricing
 
 
 def _write_jsonl(path, objs):
@@ -98,14 +148,14 @@ class TestIterJsonl(unittest.TestCase):
 
 
 class TestSumTokens(unittest.TestCase):
-    def test_dedup_by_request_and_exclude_cache_read(self):
+    def test_dedup_by_request_includes_all_token_types(self):
         objs = [
             _assistant("r1", inp=10, cc=100, cr=9999, out=50),
             _assistant("r1", inp=10, cc=100, cr=9999, out=50),  # streamed duplicate
             _assistant("r1", inp=10, cc=100, cr=9999, out=50),
         ]
-        # counted once: 10 + 100 + 50 = 160 (cache_read excluded)
-        self.assertEqual(core.sum_unique_tokens(objs), 160)
+        # counted once: 10 + 100 + 9999 + 50 = 10159 (cache_read now included)
+        self.assertEqual(core.sum_unique_tokens(objs), 10_159)
 
     def test_includes_sidechain_and_ignores_non_assistant(self):
         objs = [
@@ -114,6 +164,23 @@ class TestSumTokens(unittest.TestCase):
             _assistant("r2", inp=0, cc=30, cr=0, out=7, sidechain=True),
         ]
         self.assertEqual(core.sum_unique_tokens(objs), 20 + 5 + 30 + 7)
+
+    def test_dedup_by_message_id_and_request_id_pair(self):
+        # Same message id + different request id ⇒ distinct entries
+        objs = [
+            _assistant("rA", mid="m1", inp=10, out=20),
+            _assistant("rB", mid="m1", inp=10, out=20),
+        ]
+        self.assertEqual(core.sum_unique_tokens(objs), 60)
+
+    def test_sidechain_dedup_fallback_keeps_non_sidechain(self):
+        # Same message.id, one sidechain (no rid) + one main (with rid).
+        # Sidechain fallback collapses them; non-sidechain entry wins.
+        objs = [
+            _assistant(None, mid="m1", inp=1, out=2, sidechain=True),
+            _assistant("rX", mid="m1", inp=100, out=200),
+        ]
+        self.assertEqual(core.sum_unique_tokens(objs), 300)
 
 
 class TestCountUtterances(unittest.TestCase):
@@ -152,8 +219,14 @@ class TestEstimateApiMs(unittest.TestCase):
         self.assertEqual(core.estimate_api_ms(objs), 0)
 
 
-class TestEstimateCost(unittest.TestCase):
-    def test_opus_cost_with_cache_read_included(self):
+class TestEstimateCost(unittest.TestCase, _PricingIsolation):
+    def setUp(self):
+        self._set_pricing()
+
+    def tearDown(self):
+        self._restore_pricing()
+
+    def test_opus_per_token_cost(self):
         objs = [_assistant("r1", inp=1000, cc=0, cr=0, out=1000, model="claude-opus-4-7")]
         self.assertAlmostEqual(core.estimate_cost(objs), 0.09, places=6)
 
@@ -169,13 +242,85 @@ class TestEstimateCost(unittest.TestCase):
         ]
         self.assertAlmostEqual(core.estimate_cost(objs), 0.09, places=6)
 
+    def test_tiered_pricing_above_200k(self):
+        # 250k input tokens on the tiered sonnet model: 200k * $3/M + 50k * $6/M
+        objs = [_assistant("r1", inp=250_000, out=0, model="claude-sonnet-tiered")]
+        expected = (200_000 * 3 + 50_000 * 6) / 1_000_000
+        self.assertAlmostEqual(core.estimate_cost(objs), expected, places=6)
 
-class TestProjectTotals(unittest.TestCase):
+    def test_fast_multiplier_applied(self):
+        objs = [_assistant("r1", inp=1000, out=1000, model="claude-opus-4-7", speed="fast")]
+        # Base 0.09, fast multiplier 6.0
+        self.assertAlmostEqual(core.estimate_cost(objs), 0.09 * 6.0, places=6)
+
+    def test_cost_usd_field_passthrough_overrides_calc(self):
+        # Auto mode: per-entry costUSD wins even with token usage present
+        objs = [_assistant("r1", inp=1000, out=1000, model="claude-opus-4-7", cost_usd=12.34)]
+        self.assertAlmostEqual(core.estimate_cost(objs), 12.34, places=6)
+
+    def test_unknown_model_falls_back_to_family_prices(self):
+        objs = [_assistant("r1", inp=1000, out=1000, model="claude-opus-experimental-x")]
+        # No exact LiteLLM hit, FALLBACK_PRICES['opus'] → same as opus rate
+        self.assertAlmostEqual(core.estimate_cost(objs), 0.09, places=6)
+
+
+class TestPricingLoader(unittest.TestCase, _CcuppHomeIsolation):
     def setUp(self):
+        self._isolate_home()
+        core._reset_pricing_cache()
+
+    def tearDown(self):
+        core._reset_pricing_cache()
+        self._restore_home()
+
+    def test_parses_litellm_shape(self):
+        raw = json.dumps({
+            "claude-opus-4-7": {
+                "input_cost_per_token": 1.5e-5,
+                "output_cost_per_token": 7.5e-5,
+                "cache_creation_input_token_cost": 1.875e-5,
+                "cache_read_input_token_cost": 1.5e-6,
+                "input_cost_per_token_above_200k_tokens": 3.0e-5,
+            },
+            "not-a-model": {"description": "no prices"},
+        })
+        m = core._parse_pricing_json(raw)
+        self.assertIn("claude-opus-4-7", m)
+        self.assertAlmostEqual(m["claude-opus-4-7"]["input"], 1.5e-5)
+        self.assertAlmostEqual(m["claude-opus-4-7"]["input_above_200k"], 3.0e-5)
+        self.assertIsNone(m["claude-opus-4-7"]["output_above_200k"])
+        self.assertNotIn("not-a-model", m)
+
+    def test_fresh_disk_cache_skips_fetch(self):
+        path = core._pricing_cache_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(json.dumps({"x": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}}))
+        with patch.object(core, "_fetch_litellm", side_effect=AssertionError("must not fetch")):
+            m = core._load_pricing_map()
+        self.assertIn("x", m)
+
+    def test_stale_cache_used_when_fetch_fails(self):
+        path = core._pricing_cache_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(json.dumps({"y": {"input_cost_per_token": 9e-6, "output_cost_per_token": 9e-6}}))
+        # Mark file as older than TTL
+        old = time.time() - core.PRICING_CACHE_TTL - 100
+        os.utime(path, (old, old))
+        with patch.object(core, "_fetch_litellm", return_value=None):
+            m = core._load_pricing_map()
+        self.assertIn("y", m)
+
+
+class TestProjectTotals(unittest.TestCase, _PricingIsolation):
+    def setUp(self):
+        self._set_pricing()
         self.proj = tempfile.mkdtemp()
 
     def tearDown(self):
         shutil.rmtree(self.proj, ignore_errors=True)
+        self._restore_pricing()
 
     def _build(self):
         a = os.path.join(self.proj, "sessA.jsonl")
@@ -195,7 +340,8 @@ class TestProjectTotals(unittest.TestCase):
     def test_totals_combine_live_and_backfill(self):
         a = self._build()
         totals = core.project_totals(a, "sessA", total_cost_usd=0.50, total_api_ms=60_000)
-        self.assertEqual(totals["tokens"], 160 + 250)
+        # cache_read now included: A=10+100+1000+50=1160, B=20+200+2000+30=2250
+        self.assertEqual(totals["tokens"], 1160 + 2250)
         self.assertEqual(totals["utterances"], 2)
         b_cost = (20 * 3 + 200 * 3.75 + 2000 * 0.3 + 30 * 15) / 1_000_000
         self.assertAlmostEqual(totals["cost_usd"], 0.50 + b_cost, places=6)
@@ -269,22 +415,6 @@ class TestProjectIdentity(unittest.TestCase):
     def test_none_when_no_git_info(self):
         with patch.object(core, "_git", return_value=None):
             self.assertIsNone(core.project_identity(self.cwd))
-
-
-class _CcuppHomeIsolation:
-    """Mixin: redirect CCUPP_HOME to a tempdir so tests don't touch real registry."""
-
-    def _isolate_home(self):
-        self._home = tempfile.mkdtemp()
-        self._prev_home = os.environ.get("CCUPP_HOME")
-        os.environ["CCUPP_HOME"] = self._home
-
-    def _restore_home(self):
-        if self._prev_home is None:
-            os.environ.pop("CCUPP_HOME", None)
-        else:
-            os.environ["CCUPP_HOME"] = self._prev_home
-        shutil.rmtree(self._home, ignore_errors=True)
 
 
 class TestRegistry(unittest.TestCase, _CcuppHomeIsolation):

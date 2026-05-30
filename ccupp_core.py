@@ -3,15 +3,33 @@ import os
 import re
 import json
 import glob
+import time
 import hashlib
 import subprocess
+import urllib.request
+import urllib.error
 from datetime import datetime, timezone
 
-# Rough Anthropic list prices, USD per 1M tokens. Approximate; edit as prices change.
-PRICES = {
-    "opus":   {"in": 15.0, "out": 75.0, "cache_write": 18.75, "cache_read": 1.5},
-    "sonnet": {"in": 3.0,  "out": 15.0, "cache_write": 3.75,  "cache_read": 0.3},
-    "haiku":  {"in": 1.0,  "out": 5.0,  "cache_write": 1.25,  "cache_read": 0.1},
+LITELLM_PRICING_URL = (
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/"
+    "model_prices_and_context_window.json"
+)
+PRICING_CACHE_TTL = 24 * 3600
+PRICING_FETCH_TIMEOUT = 10
+TIER_THRESHOLD = 200_000
+
+# Per-model fast-mode multipliers, mirroring ccusage's fast-multiplier-overrides.
+FAST_MULTIPLIER_OVERRIDES = {
+    "claude-opus-4-6": 6.0,
+    "claude-opus-4-7": 6.0,
+    "claude-opus-4-8": 2.0,
+}
+
+# Per-million-token fallback (USD) when LiteLLM JSON is unreachable on first run.
+FALLBACK_PRICES = {
+    "opus":   {"in": 15.0, "out": 75.0, "cc": 18.75, "cr": 1.5},
+    "sonnet": {"in": 3.0,  "out": 15.0, "cc": 3.75,  "cr": 0.3},
+    "haiku":  {"in": 1.0,  "out": 5.0,  "cc": 1.25,  "cr": 0.1},
 }
 
 SLASH_PREFIXES = (
@@ -69,20 +87,80 @@ def iter_jsonl(path):
                 continue
 
 
-def sum_unique_tokens(objs):
-    seen = {}
+def _usage_total(o):
+    u = ((o.get("message") or {}).get("usage")) or {}
+    return (
+        int(u.get("input_tokens") or 0)
+        + int(u.get("output_tokens") or 0)
+        + int(u.get("cache_creation_input_tokens") or 0)
+        + int(u.get("cache_read_input_tokens") or 0)
+    )
+
+
+def _should_replace(cand, existing):
+    cs = bool(cand.get("isSidechain"))
+    es = bool(existing.get("isSidechain"))
+    if cs != es:
+        return es  # non-sidechain wins over sidechain
+    ct = _usage_total(cand)
+    et = _usage_total(existing)
+    if ct != et:
+        return ct > et
+    cu = ((cand.get("message") or {}).get("usage")) or {}
+    eu = ((existing.get("message") or {}).get("usage")) or {}
+    return cu.get("speed") is not None and eu.get("speed") is None
+
+
+def _dedupe_assistants(objs):
+    """ccusage-style dedup: (message.id, requestId) primary, sidechain falls back to message.id."""
+    by_exact = {}
+    by_msg = {}
+    kept = []
     for o in objs:
         if o.get("type") != "assistant":
             continue
-        usage = (o.get("message") or {}).get("usage") or {}
+        msg = o.get("message") or {}
+        mid = msg.get("id")
         rid = o.get("requestId")
-        key = rid if rid is not None else id(o)
-        seen[key] = usage  # last usage wins for a given request
+        is_sc = bool(o.get("isSidechain"))
+
+        idx = None
+        if mid is not None:
+            exact = (mid, rid)
+            if exact in by_exact:
+                idx = by_exact[exact]
+            else:
+                msg_idx = by_msg.get(mid)
+                if msg_idx is not None and (is_sc or bool(kept[msg_idx].get("isSidechain"))):
+                    idx = msg_idx
+        elif rid is not None:
+            exact = (None, rid)
+            if exact in by_exact:
+                idx = by_exact[exact]
+
+        if idx is not None:
+            if _should_replace(o, kept[idx]):
+                kept[idx] = o
+            continue
+
+        kept.append(o)
+        new_idx = len(kept) - 1
+        if mid is not None:
+            by_exact[(mid, rid)] = new_idx
+            by_msg[mid] = new_idx
+        elif rid is not None:
+            by_exact[(None, rid)] = new_idx
+    return kept
+
+
+def sum_unique_tokens(objs):
     total = 0
-    for usage in seen.values():
-        total += int(usage.get("input_tokens") or 0)
-        total += int(usage.get("cache_creation_input_tokens") or 0)
-        total += int(usage.get("output_tokens") or 0)
+    for o in _dedupe_assistants(objs):
+        u = ((o.get("message") or {}).get("usage")) or {}
+        total += int(u.get("input_tokens") or 0)
+        total += int(u.get("cache_creation_input_tokens") or 0)
+        total += int(u.get("cache_read_input_tokens") or 0)
+        total += int(u.get("output_tokens") or 0)
     return total
 
 
@@ -161,33 +239,224 @@ def estimate_api_ms(objs):
     return total_ms
 
 
-def price_for_model(model_id):
-    mid = (model_id or "").lower()
-    for key in ("opus", "sonnet", "haiku"):
-        if key in mid:
-            return PRICES[key]
-    return PRICES["sonnet"]
+# ---- LiteLLM pricing (runtime fetch + 24h disk cache) ----
+
+_PRICING_CACHE = None  # in-process memo
+
+
+def _pricing_cache_path():
+    return os.path.join(_ccupp_home(), "litellm-pricing.json")
+
+
+def _fetch_litellm():
+    try:
+        with urllib.request.urlopen(LITELLM_PRICING_URL, timeout=PRICING_FETCH_TIMEOUT) as r:
+            raw = r.read().decode("utf-8")
+        json.loads(raw)  # validate
+        return raw
+    except (urllib.error.URLError, ValueError, OSError):
+        return None
+
+
+def _read_cache_if_fresh():
+    path = _pricing_cache_path()
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    if time.time() - st.st_mtime >= PRICING_CACHE_TTL:
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _read_cache_stale():
+    try:
+        with open(_pricing_cache_path(), encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _save_pricing_cache(raw):
+    path = _pricing_cache_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(raw)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def _opt_float(v):
+    try:
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_litellm_entry(e):
+    if not isinstance(e, dict):
+        return None
+    inp = e.get("input_cost_per_token")
+    out = e.get("output_cost_per_token")
+    if inp is None and out is None:
+        return None
+    return {
+        "input": float(inp or 0),
+        "output": float(out or 0),
+        "cache_create": float(e.get("cache_creation_input_token_cost") or 0),
+        "cache_read": float(e.get("cache_read_input_token_cost") or 0),
+        "input_above_200k": _opt_float(e.get("input_cost_per_token_above_200k_tokens")),
+        "output_above_200k": _opt_float(e.get("output_cost_per_token_above_200k_tokens")),
+        "cache_create_above_200k": _opt_float(
+            e.get("cache_creation_input_token_cost_above_200k_tokens")
+        ),
+        "cache_read_above_200k": _opt_float(
+            e.get("cache_read_input_token_cost_above_200k_tokens")
+        ),
+    }
+
+
+def _parse_pricing_json(raw):
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for name, entry in data.items():
+        p = _parse_litellm_entry(entry)
+        if p is not None:
+            out[name] = p
+    return out
+
+
+def _load_pricing_map():
+    """Memoized. Network-free when disk cache is < 24h old."""
+    global _PRICING_CACHE
+    if _PRICING_CACHE is not None:
+        return _PRICING_CACHE
+    raw = _read_cache_if_fresh()
+    if raw is None:
+        fetched = _fetch_litellm()
+        if fetched is not None:
+            _save_pricing_cache(fetched)
+            raw = fetched
+        else:
+            raw = _read_cache_stale()
+    _PRICING_CACHE = _parse_pricing_json(raw)
+    return _PRICING_CACHE
+
+
+def _reset_pricing_cache():
+    """Test hook."""
+    global _PRICING_CACHE
+    _PRICING_CACHE = None
+
+
+def _model_candidates(model):
+    if not model:
+        return []
+    cands = [model]
+    parts = model.rsplit("-", 1)
+    if len(parts) == 2 and parts[1].isdigit() and len(parts[1]) == 8:
+        cands.append(parts[0])  # strip -YYYYMMDD alias
+    if "/" in model:
+        cands.append(model.split("/", 1)[1])  # strip provider prefix
+    return cands
+
+
+def _find_pricing(model, pricing_map):
+    for c in _model_candidates(model):
+        if c in pricing_map:
+            return pricing_map[c]
+    return None
+
+
+def _fast_multiplier(model):
+    if not model:
+        return 1.0
+    for prefix, mult in FAST_MULTIPLIER_OVERRIDES.items():
+        if model.startswith(prefix):
+            return mult
+    return 1.0
+
+
+def _fallback_pricing(model):
+    m = (model or "").lower()
+    for fam in ("opus", "sonnet", "haiku"):
+        if fam in m:
+            p = FALLBACK_PRICES[fam]
+            return {
+                "input": p["in"] / 1_000_000,
+                "output": p["out"] / 1_000_000,
+                "cache_create": p["cc"] / 1_000_000,
+                "cache_read": p["cr"] / 1_000_000,
+                "input_above_200k": None,
+                "output_above_200k": None,
+                "cache_create_above_200k": None,
+                "cache_read_above_200k": None,
+            }
+    return None
+
+
+def _tiered(tokens, base, above):
+    tokens = int(tokens or 0)
+    if tokens <= 0:
+        return 0.0
+    if above is not None and tokens > TIER_THRESHOLD:
+        return TIER_THRESHOLD * base + (tokens - TIER_THRESHOLD) * above
+    return tokens * base
+
+
+def _calc_cost_from_tokens(model, usage, pricing_map):
+    p = _find_pricing(model, pricing_map) or _fallback_pricing(model)
+    if p is None:
+        return 0.0
+    cost = (
+        _tiered(usage.get("input_tokens"), p["input"], p["input_above_200k"])
+        + _tiered(usage.get("output_tokens"), p["output"], p["output_above_200k"])
+        + _tiered(
+            usage.get("cache_creation_input_tokens"),
+            p["cache_create"],
+            p["cache_create_above_200k"],
+        )
+        + _tiered(
+            usage.get("cache_read_input_tokens"),
+            p["cache_read"],
+            p["cache_read_above_200k"],
+        )
+    )
+    speed = usage.get("speed")
+    if isinstance(speed, str) and speed.lower() == "fast":
+        cost *= _fast_multiplier(model)
+    return cost
 
 
 def estimate_cost(objs):
-    seen = {}
-    for o in objs:
-        if o.get("type") != "assistant":
-            continue
+    """ccusage 'Auto' mode: prefer per-entry costUSD when present, else compute from tokens."""
+    pricing = _load_pricing_map()
+    total = 0.0
+    for o in _dedupe_assistants(objs):
+        cost = o.get("costUSD")
+        if cost is not None:
+            try:
+                total += float(cost)
+                continue
+            except (TypeError, ValueError):
+                pass
         msg = o.get("message") or {}
-        rid = o.get("requestId")
-        key = rid if rid is not None else id(o)
-        seen[key] = (msg.get("model"), msg.get("usage") or {})
-    cost = 0.0
-    for model, usage in seen.values():
-        p = price_for_model(model)
-        cost += (
-            int(usage.get("input_tokens") or 0) * p["in"]
-            + int(usage.get("cache_creation_input_tokens") or 0) * p["cache_write"]
-            + int(usage.get("cache_read_input_tokens") or 0) * p["cache_read"]
-            + int(usage.get("output_tokens") or 0) * p["out"]
-        ) / 1_000_000
-    return cost
+        total += _calc_cost_from_tokens(msg.get("model"), msg.get("usage") or {}, pricing)
+    return total
 
 
 def _read_json(path):

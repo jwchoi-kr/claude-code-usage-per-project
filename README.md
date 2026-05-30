@@ -101,7 +101,9 @@ This design is idempotent (re-running never double-counts) and safe for concurre
 
 ### Token counting
 
-Tokens are counted as `input + cache_creation + output` per unique `requestId`, **excluding `cache_read`**. Cache reads are the same past context re-read each turn — including them would inflate the number non-linearly. Cost calculations do include cache reads.
+Tokens are summed as `input + cache_creation + cache_read + output` — all four types — matching [ccusage](https://github.com/ryoppippi/ccusage). Cache reads inflate the displayed number, but they're real tokens you pay for, so the figure stays comparable across tools.
+
+Deduplication uses `(message.id, requestId)` as the primary key with a sidechain fallback on `message.id` alone (subagent copies of the same message collapse to one entry). On key collisions, non-sidechain wins over sidechain, then larger token total wins, then the entry with `speed` info wins — same tie-breaking as ccusage.
 
 Subagent (sidechain) tokens are included; they represent real work done by the model on your behalf.
 
@@ -118,7 +120,14 @@ Deduplicated by `promptId` (Claude Code can emit the same prompt ID multiple tim
 
 ### Backfill estimation
 
-Sessions from before installation have no exact cost/time data. Cost is estimated from the transcript's `message.model` field using a rough price table (Opus/Sonnet/Haiku); time is estimated from message timestamps. Backfilled sessions are marked with `~` and `"estimated": true`.
+Sessions from before installation have no exact cost/time data. Time is estimated from message timestamps. Cost uses ccusage-style *Auto* mode:
+
+- If a transcript entry has a `costUSD` field, that value wins.
+- Otherwise cost = tokens × per-model rate from the [LiteLLM pricing table](https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json), with the 200K-tier surcharges and the Fast-mode multiplier applied.
+
+The LiteLLM JSON is fetched on first use and cached at `~/.ccupp/litellm-pricing.json` for 24h. If the network is unreachable on first run, ccupp falls back to a built-in per-family table (`opus`/`sonnet`/`haiku`). The live session always uses the exact `cost.total_cost_usd` Claude Code provides via stdin — pricing-table inaccuracies only affect backfilled sessions.
+
+Backfilled sessions are marked with `~` and `"estimated": true`.
 
 ## Running tests
 
@@ -126,7 +135,7 @@ Sessions from before installation have no exact cost/time data. Cost is estimate
 python3 -m unittest test_ccupp test_ccupp_core test_ccupp_report test_ccupp_export -v
 ```
 
-All tests use stdlib `unittest`, `tempfile`, and `shutil` — no external dependencies.
+All tests use stdlib `unittest`, `tempfile`, and `shutil` — no external dependencies and no network (pricing is injected via `core._PRICING_CACHE` in `_PricingIsolation`).
 
 ## Files
 

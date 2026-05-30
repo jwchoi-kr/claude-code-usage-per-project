@@ -28,15 +28,15 @@ docs/                 Historical planning/spec docs — treat as context only
 python3 -m unittest test_ccupp test_ccupp_core test_ccupp_report test_ccupp_export -v
 ```
 
-No external dependencies. All tests use stdlib `unittest`, `tempfile`, `shutil`.
+No external dependencies for runtime or tests. The only network call is the LiteLLM pricing fetch in `_load_pricing_map()`, which is cached to disk and gated by tests via `_PRICING_CACHE`.
 
 ## Key invariants
 
 **Snapshot storage path is `.ccupp/sessions/`** inside the project's Claude transcript directory. The test suite asserts this path. Don't rename it without updating tests.
 
-**Token counting** excludes `cache_read_input_tokens`; includes `cache_creation_input_tokens`. This is intentional — cache reads inflate the number non-linearly across turns. See `sum_unique_tokens()` in `ccupp_core.py`.
+**Token counting includes all four token types** — `input`, `output`, `cache_creation_input`, `cache_read_input` — matching ccusage. See `sum_unique_tokens()` in `ccupp_core.py`.
 
-**Deduplication by `requestId`**: Claude Code streams multiple lines per request. `sum_unique_tokens` and `estimate_cost` both key by `requestId` and take the last value, so the final usage numbers for each request are used once.
+**Deduplication by `(message.id, requestId)`** with sidechain fallback to `message.id` alone. Claude Code streams multiple lines per request and may emit sidechain copies of the same message. Tie-breaking when keys collide (in `_should_replace`): non-sidechain wins over sidechain → larger token total wins → entry with `speed` info wins. `sum_unique_tokens` and `estimate_cost` share this dedup via `_dedupe_assistants`.
 
 **`main()` must never raise**. The `except Exception: pass` block around line-2 rendering is intentional — if the status line crashes, Claude Code shows a blank line, which breaks the UI for the whole session.
 
@@ -50,9 +50,13 @@ The status line fires after every assistant response, not once per session. A si
 **Why is `workspace.project_dir` used for the project name instead of `dirname(transcript_path)`?**
 `transcript_path` is inside `~/.claude/projects/...`, not the actual working directory. `workspace.project_dir` is the actual project folder.
 
-**Why does backfill cost include `cache_read` but token count doesn't?**
-Cost: users actually pay for cache reads, so cost estimates should include them.
-Tokens: cache reads are the same past context re-read each turn — summing them across turns inflates the number in a way that doesn't reflect real model work. The live session gets exact cost from stdin so there's no double-counting issue there.
+**How is cost calculated?**
+Modeled on ccusage's Auto mode:
+- Live session: trust `total_cost_usd` from Claude Code's stdin.
+- Per-entry: if the JSONL line has a `costUSD` field, use it directly.
+- Otherwise compute from tokens × per-model LiteLLM rates, with the 200K-tier surcharges and the Fast-mode multiplier (`FAST_MULTIPLIER_OVERRIDES`).
+
+Pricing is loaded from `https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json`, cached at `~/.ccupp/litellm-pricing.json` for 24h. On fetch failure: stale cache wins; otherwise falls back to `FALLBACK_PRICES` (per-family `opus`/`sonnet`/`haiku` rates) so first-run-offline still produces a sensible estimate. Tests must override `core._PRICING_CACHE` (see `_PricingIsolation` in `test_ccupp_core.py`) to keep the suite network-free.
 
 ## Adding features
 
