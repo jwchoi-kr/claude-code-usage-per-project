@@ -46,17 +46,20 @@ class TestRenderLine1(unittest.TestCase):
             "context_window": {"used_percentage": 38},
         }
         out = ccupp.render_line1(data)
-        self.assertIn("◈ Opus 4.7", out)
-        self.assertIn("· xhigh", out)
+        self.assertIn("Opus 4.7", out)
+        self.assertNotIn("◈", out)
+        self.assertIn(ccupp._tag("xhigh"), out)
         self.assertIn("38%", out)
         self.assertIn("█" * 3, out)
-        self.assertIn("\033[36m", out)  # model cyan
+        self.assertIn(ccupp.CYAN, out)
+        self.assertIn(f"{ccupp.DIM}ctx{ccupp.RESET}", out)
 
     def test_missing_effort_and_null_pct(self):
         data = {"model": {"display_name": "Sonnet 4.6"}, "context_window": {"used_percentage": None}}
         out = ccupp.render_line1(data)
-        self.assertIn("◈ Sonnet 4.6", out)
-        self.assertNotIn("·", out.split("ctx")[0])  # no effort separator before ctx
+        self.assertIn("Sonnet 4.6", out)
+        self.assertNotIn("◈", out)
+        self.assertNotIn(f"{ccupp.DIM}[{ccupp.RESET}", out.split("ctx")[0])  # no effort tag
         self.assertIn("0%", out)
 
 
@@ -64,7 +67,9 @@ class TestRenderLine2(unittest.TestCase):
     def test_format(self):
         totals = {"utterances": 12, "tokens": 84200, "cost_usd": 1.83, "api_ms": 372_000}
         out = ccupp.render_line2("demo", totals)
-        self.assertEqual(out, "  ▸ demo  💬 12  ·  84.2k tok  ·  $1.83  ·  ⏱ 6m12s")
+        t = ccupp._tag
+        expected = "  " + "  ".join(["demo", t("12 msg"), t("84.2k tok"), t("$1.83"), t("6m12s")])
+        self.assertEqual(out, expected)
 
 
 class TestMain(unittest.TestCase):
@@ -103,9 +108,9 @@ class TestMain(unittest.TestCase):
         out = self._run_main(data).rstrip("\n")
         lines = out.split("\n")
         self.assertEqual(len(lines), 2)
-        self.assertIn("◈ Opus 4.7", lines[0])
-        self.assertIn(f"▸ {os.path.basename(self.proj)}", lines[1])
-        self.assertIn("💬 1", lines[1])
+        self.assertIn("Opus 4.7", lines[0])
+        self.assertIn(os.path.basename(self.proj), lines[1])
+        self.assertIn("1 msg", lines[1])
 
     def test_bad_stdin_prints_line1_only_and_does_not_raise(self):
         old_stdin = sys.stdin
@@ -118,7 +123,7 @@ class TestMain(unittest.TestCase):
             sys.stdin = old_stdin
         out = buf.getvalue().rstrip("\n")
         self.assertEqual(len(out.split("\n")), 1)  # only line 1
-        self.assertIn("◈", out)
+        self.assertIn("ctx", out)  # line 1 rendered even with bad stdin
 
 
 class TestExportDispatch(unittest.TestCase):

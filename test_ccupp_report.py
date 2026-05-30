@@ -47,7 +47,8 @@ class TestReport(unittest.TestCase):
         self.assertNotIn("cccccccc", out)
         self.assertIn("TOTAL", out)
         self.assertIn("15", out)
-        self.assertIn("┌", out)
+        self.assertIn("╭", out)
+        self.assertIn("USER_MSG", out)
         self.assertIn("~ = backfill estimate", out)
         self.assertLess(out.index("bbbbbbbb"), out.index("aaaaaaaa~"))
 

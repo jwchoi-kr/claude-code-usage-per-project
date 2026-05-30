@@ -11,12 +11,12 @@ A Claude Code status line and usage tracker that shows per-project efficiency me
 When Claude Code invokes it as a `statusLine` command, reads JSON from stdin and prints a 2-line HUD:
 
 ```
-◈ Opus 4.7 · xhigh        ctx ███░░░░░░░ 38%
-  ▸ myproject  💬 12  ·  84.2k tok  ·  $1.83  ·  ⏱ 6m12s
+Opus 4.7  [xhigh]   ctx ███░░░░░░░ 38%
+  myproject  [12 msg]  [84.2k tok]  [$1.83]  [6m12s]
 ```
 
-- **Line 1**: Model name (cyan) · effort level · context-window usage bar (green/yellow/red at 70%/90%)
-- **Line 2**: Project name · cumulative human prompts · unique tokens · cost · total API response time
+- **Line 1**: Model name (cyan) — effort level as a dim-bracket tag — context-window bar (green/yellow/red at 70%/90%)
+- **Line 2**: Project name anchor — cumulative user messages, unique tokens, cost, total API response time, each in a dim-bracket tag
 
 ### 2. Usage report (run directly in terminal)
 
@@ -29,16 +29,18 @@ Prints a boxed per-session table for the project in the current directory:
 ```
 myproject — Claude Code usage (per project)
 
-┌──────────────┬─────────────────┬─────────┬────────┬───────┬─────────┐
-│ SESSION      │ DATE            │ PROMPTS │ TOKENS │  COST │    TIME │
-├──────────────┼─────────────────┼─────────┼────────┼───────┼─────────┤
-│ 9beb422a     │ 2026-05-30 12:00│      12 │  84.2k │ $1.83 │  6m12s  │
-│ 0ec212f4~    │ 2026-05-29 09:15│       8 │  51.0k │ $0.94 │  4m30s  │
-├──────────────┼─────────────────┼─────────┼────────┼───────┼─────────┤
-│ TOTAL        │                 │      20 │ 135.2k │ $2.77 │ 10m42s  │
-└──────────────┴─────────────────┴─────────┴────────┴───────┴─────────┘
+╭──────────────┬─────────────────┬──────────┬────────┬───────┬─────────╮
+│ SESSION      │ DATE            │ USER_MSG │ TOKENS │  COST │    TIME │
+├──────────────┼─────────────────┼──────────┼────────┼───────┼─────────┤
+│ 9beb422a     │ 2026-05-30 12:00│       12 │  84.2k │ $1.83 │  6m12s  │
+│ 0ec212f4~    │ 2026-05-29 09:15│        8 │  51.0k │ $0.94 │  4m30s  │
+├──────────────┼─────────────────┼──────────┼────────┼───────┼─────────┤
+│ TOTAL        │                 │       20 │ 135.2k │ $2.77 │ 10m42s  │
+╰──────────────┴─────────────────┴──────────┴────────┴───────┴─────────╯
   ~ = backfill estimate (cost·time approximate)
 ```
+
+(In the real terminal, the border characters render dim so the data stands out.)
 
 Sessions before installation are lazily backfilled on first run (`~` marker).
 

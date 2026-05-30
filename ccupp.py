@@ -9,27 +9,37 @@ import json
 from ccupp_core import project_totals, render_bar, bar_color, format_tokens, format_duration
 
 
+DIM = "\033[2m"
+RESET = "\033[0m"
+CYAN = "\033[36m"
+
+
+def _tag(s):
+    return f"{DIM}[{RESET}{s}{DIM}]{RESET}"
+
+
 def render_line1(data):
     model = (data.get("model") or {}).get("display_name") or "?"
     effort = (data.get("effort") or {}).get("level")
     pct = (data.get("context_window") or {}).get("used_percentage")
     pct = int(pct) if pct is not None else 0
-    head = f"\033[36m◈ {model}\033[0m"
+    head = f"{CYAN}{model}{RESET}"
     if effort:
-        head += f" · {effort}"
+        head += f"  {_tag(effort)}"
     bar = render_bar(pct)
     color = bar_color(pct)
-    return f"{head}        ctx {color}{bar}\033[0m {pct}%"
+    return f"{head}   {DIM}ctx{RESET} {color}{bar}{RESET} {pct}%"
 
 
 def render_line2(project_name, totals):
-    return (
-        f"  ▸ {project_name}  "
-        f"💬 {totals['utterances']}  ·  "
-        f"{format_tokens(totals['tokens'])} tok  ·  "
-        f"${totals['cost_usd']:.2f}  ·  "
-        f"⏱ {format_duration(totals['api_ms'])}"
-    )
+    parts = [
+        project_name,
+        _tag(f"{totals['utterances']} msg"),
+        _tag(f"{format_tokens(totals['tokens'])} tok"),
+        _tag(f"${totals['cost_usd']:.2f}"),
+        _tag(format_duration(totals['api_ms'])),
+    ]
+    return "  " + "  ".join(parts)
 
 
 def main():

@@ -57,21 +57,26 @@ def _fmt_date(ts):
     return d.astimezone().strftime("%Y-%m-%d %H:%M") if d else "—"
 
 
+_DIM = "\033[2m"
+_RESET = "\033[0m"
+
+
 def _box_table(headers, body, total, aligns):
     cols = list(zip(*([headers] + body + [total])))
     widths = [max(len(c) for c in col) for col in cols]
+    bar = f"{_DIM}│{_RESET}"
 
     def row(cells):
         out = [c.ljust(w) if a == "left" else c.rjust(w)
                for c, w, a in zip(cells, widths, aligns)]
-        return "│ " + " │ ".join(out) + " │"
+        return f"{bar} " + f" {bar} ".join(out) + f" {bar}"
 
     def rule(left, mid, right):
-        return left + mid.join("─" * (w + 2) for w in widths) + right
+        return f"{_DIM}{left}{mid.join('─' * (w + 2) for w in widths)}{right}{_RESET}"
 
-    lines = [rule("┌", "┬", "┐"), row(headers), rule("├", "┼", "┤")]
+    lines = [rule("╭", "┬", "╮"), row(headers), rule("├", "┼", "┤")]
     lines += [row(b) for b in body]
-    lines += [rule("├", "┼", "┤"), row(total), rule("└", "┴", "┘")]
+    lines += [rule("├", "┼", "┤"), row(total), rule("╰", "┴", "╯")]
     return "\n".join(lines)
 
 
@@ -93,7 +98,7 @@ def render_report(project_dir=None, cwd=None):
         return f"{title}\n\n  No tracked sessions for this folder.\n  (searched: {root})"
     rows.sort(key=lambda r: (r["first_ts"] is None, r["first_ts"] or ""))
 
-    headers = ["SESSION", "DATE", "PROMPTS", "TOKENS", "COST", "TIME"]
+    headers = ["SESSION", "DATE", "USER_MSG", "TOKENS", "COST", "TIME"]
     aligns = ["left", "left", "right", "right", "right", "right"]
     body = []
     tu = tt = tms = 0
