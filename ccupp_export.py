@@ -158,9 +158,26 @@ def session_summary(transcript_path):
     }
 
 
-def build_sessions(project_dir):
-    """All sessions in a project, earliest-opened first (by first message timestamp)."""
-    sums = [session_summary(tp) for tp in glob.glob(os.path.join(project_dir, "*.jsonl"))]
+def build_sessions(project_dir, identity=None):
+    """All sessions in a project, earliest-opened first (by first message timestamp).
+
+    If `identity` is provided, also includes sessions from every transcript dir
+    registered under the same project identity (cross-rename support).
+    """
+    dirs = [project_dir] if project_dir else []
+    if identity:
+        for d in ccupp._dirs_for_identity(identity):
+            if d not in dirs:
+                dirs.append(d)
+    sums = []
+    seen_sid = set()
+    for d in dirs:
+        for tp in glob.glob(os.path.join(d, "*.jsonl")):
+            s = session_summary(tp)
+            if s["sid"] in seen_sid:
+                continue
+            seen_sid.add(s["sid"])
+            sums.append(s)
     sums.sort(key=lambda s: (s["first_ts"] is None, s["first_ts"] or "", s["path"]))
     return sums
 
@@ -199,7 +216,8 @@ def render_markdown(project_name, sessions, now_str):
 def export(cwd, projects_root, out_path=None):
     project_dir = find_project_dir(cwd, projects_root)
     project_name = os.path.basename(os.path.abspath(cwd).rstrip("/")) or os.path.abspath(cwd)
-    sessions = build_sessions(project_dir) if project_dir else []
+    identity = ccupp.project_identity(cwd)
+    sessions = build_sessions(project_dir, identity=identity) if (project_dir or identity) else []
     md = render_markdown(project_name, sessions, datetime.now().strftime("%Y-%m-%d %H:%M"))
     out_path = out_path or os.path.join(cwd, "PROMPTS.md")
     with open(out_path, "w", encoding="utf-8") as f:

@@ -51,9 +51,9 @@ def main():
         transcript_path = data.get("transcript_path")
         session_id = data.get("session_id")
         if transcript_path and session_id:
+            workspace_cwd = (data.get("workspace") or {}).get("project_dir")
             project_name = os.path.basename(
-                (data.get("workspace") or {}).get("project_dir")
-                or os.path.dirname(transcript_path)
+                workspace_cwd or os.path.dirname(transcript_path)
             )
             cost = data.get("cost") or {}
             totals = project_totals(
@@ -61,6 +61,7 @@ def main():
                 session_id,
                 cost.get("total_cost_usd"),
                 cost.get("total_api_duration_ms"),
+                cwd=workspace_cwd,
             )
             lines.append(render_line2(project_name, totals))
     except Exception:

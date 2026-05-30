@@ -4,6 +4,7 @@ import json
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ccupp_core as core
@@ -206,6 +207,172 @@ class TestProjectTotals(unittest.TestCase):
         t1 = core.project_totals(a, "sessA", 0.50, 60_000)
         t2 = core.project_totals(a, "sessA", 0.50, 60_000)
         self.assertEqual(t1, t2)
+
+
+class TestNormalizeRemote(unittest.TestCase):
+    def test_https_strip_dotgit(self):
+        self.assertEqual(core._normalize_remote("https://github.com/u/repo.git"),
+                         "github.com/u/repo")
+
+    def test_ssh_form(self):
+        self.assertEqual(core._normalize_remote("git@github.com:u/repo.git"),
+                         "github.com/u/repo")
+
+    def test_trailing_slash_and_case(self):
+        self.assertEqual(core._normalize_remote("HTTPS://GitHub.com/u/Repo/"),
+                         "github.com/u/repo")
+
+    def test_empty(self):
+        self.assertEqual(core._normalize_remote(""), "")
+        self.assertEqual(core._normalize_remote(None), "")
+
+
+class TestProjectIdentity(unittest.TestCase):
+    def setUp(self):
+        self.cwd = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.cwd, ignore_errors=True)
+
+    def _fake_git(self, mapping):
+        """Build a fake _git(cwd, args) that returns mapping[tuple(args)]."""
+        def fake(cwd, args):
+            return mapping.get(tuple(args))
+        return fake
+
+    def test_invalid_cwd(self):
+        self.assertIsNone(core.project_identity(None))
+        self.assertIsNone(core.project_identity(""))
+        self.assertIsNone(core.project_identity("/no/such/dir/should/exist/123abc"))
+
+    def test_remote_wins(self):
+        fake = self._fake_git({
+            ("config", "--get", "remote.origin.url"): "git@github.com:u/repo.git",
+            ("rev-list", "--max-parents=0", "HEAD"): "abc123",
+        })
+        with patch.object(core, "_git", side_effect=fake):
+            ident = core.project_identity(self.cwd)
+        self.assertTrue(ident.startswith("remote:"))
+        # deterministic: same URL hashes the same
+        with patch.object(core, "_git", side_effect=fake):
+            self.assertEqual(core.project_identity(self.cwd), ident)
+
+    def test_first_commit_fallback_when_no_remote(self):
+        fake = self._fake_git({
+            ("config", "--get", "remote.origin.url"): None,
+            ("rev-list", "--max-parents=0", "HEAD"): "deadbeef1234567890",
+        })
+        with patch.object(core, "_git", side_effect=fake):
+            ident = core.project_identity(self.cwd)
+        self.assertEqual(ident, "commit:deadbeef12345678")
+
+    def test_none_when_no_git_info(self):
+        with patch.object(core, "_git", return_value=None):
+            self.assertIsNone(core.project_identity(self.cwd))
+
+
+class _CcuppHomeIsolation:
+    """Mixin: redirect CCUPP_HOME to a tempdir so tests don't touch real registry."""
+
+    def _isolate_home(self):
+        self._home = tempfile.mkdtemp()
+        self._prev_home = os.environ.get("CCUPP_HOME")
+        os.environ["CCUPP_HOME"] = self._home
+
+    def _restore_home(self):
+        if self._prev_home is None:
+            os.environ.pop("CCUPP_HOME", None)
+        else:
+            os.environ["CCUPP_HOME"] = self._prev_home
+        shutil.rmtree(self._home, ignore_errors=True)
+
+
+class TestRegistry(unittest.TestCase, _CcuppHomeIsolation):
+    def setUp(self):
+        self._isolate_home()
+
+    def tearDown(self):
+        self._restore_home()
+
+    def test_missing_registry_returns_empty(self):
+        self.assertEqual(core._dirs_for_identity("commit:nope"), [])
+        self.assertEqual(core._load_registry()["projects"], {})
+
+    def test_register_dedup_and_lookup(self):
+        core._register_dir("commit:x", "/a", display_name="A")
+        core._register_dir("commit:x", "/a")          # dup → no-op
+        core._register_dir("commit:x", "/b")
+        core._register_dir("commit:y", "/c")
+        self.assertEqual(core._dirs_for_identity("commit:x"), ["/a", "/b"])
+        self.assertEqual(core._dirs_for_identity("commit:y"), ["/c"])
+        reg = core._load_registry()
+        self.assertEqual(reg["projects"]["commit:x"]["display_name"], "A")
+        self.assertIn("last_seen", reg["projects"]["commit:x"])
+
+    def test_corrupt_registry_falls_back_empty(self):
+        path = core._registry_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write("{not valid json")
+        self.assertEqual(core._load_registry()["projects"], {})
+        self.assertEqual(core._dirs_for_identity("commit:any"), [])
+
+
+class TestProjectTotalsCrossDir(unittest.TestCase, _CcuppHomeIsolation):
+    def setUp(self):
+        self._isolate_home()
+        self.dirA = tempfile.mkdtemp()
+        self.dirB = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.dirA, ignore_errors=True)
+        shutil.rmtree(self.dirB, ignore_errors=True)
+        self._restore_home()
+
+    def test_aggregates_snapshots_from_registered_dirs(self):
+        # Prior session lives in dirA (old folder name).
+        old_snap_dir = os.path.join(self.dirA, ".ccupp", "sessions")
+        os.makedirs(old_snap_dir)
+        with open(os.path.join(old_snap_dir, "oldSess.json"), "w") as f:
+            json.dump({"tokens": 1000, "utterances": 7,
+                       "cost_usd": 1.50, "api_ms": 120_000, "estimated": True}, f)
+
+        # Pre-register dirA under our fake identity (mimics a previous render).
+        core._register_dir("commit:proj1", self.dirA)
+
+        # New live session in dirB (new folder name).
+        live_tp = os.path.join(self.dirB, "newSess.jsonl")
+        _write_jsonl(live_tp, [
+            {"type": "user", "promptId": "p", "message": {"content": "hi"}},
+            _assistant("r1", inp=10, cc=0, cr=0, out=20, model="claude-opus-4-7"),
+        ])
+
+        with patch.object(core, "project_identity", return_value="commit:proj1"):
+            totals = core.project_totals(live_tp, "newSess",
+                                         total_cost_usd=0.25, total_api_ms=30_000,
+                                         cwd="/fake/cwd")
+
+        # live: 1 utterance + 10+20 tokens, 0.25 cost, 30s
+        # backfill from dirA: 7 utterances + 1000 tokens, 1.50 cost, 120s
+        self.assertEqual(totals["utterances"], 1 + 7)
+        self.assertEqual(totals["tokens"], 30 + 1000)
+        self.assertAlmostEqual(totals["cost_usd"], 0.25 + 1.50, places=6)
+        self.assertEqual(totals["api_ms"], 30_000 + 120_000)
+
+        # dirB got registered too.
+        self.assertIn(self.dirB, core._dirs_for_identity("commit:proj1"))
+
+    def test_identity_none_keeps_old_behavior(self):
+        a = os.path.join(self.dirA, "sessA.jsonl")
+        _write_jsonl(a, [
+            {"type": "user", "promptId": "p", "message": {"content": "hi"}},
+            _assistant("r1", inp=10, cc=0, cr=0, out=20, model="claude-opus-4-7"),
+        ])
+        # Even if dirB is registered under some other identity, no cwd → no cross-pull.
+        core._register_dir("commit:other", self.dirB)
+        totals = core.project_totals(a, "sessA", 0.0, 0)
+        self.assertEqual(totals["utterances"], 1)
+        self.assertEqual(totals["tokens"], 30)
 
 
 if __name__ == "__main__":

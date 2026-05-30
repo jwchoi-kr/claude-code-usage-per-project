@@ -1,8 +1,11 @@
 """ccupp_core — shared utilities, data analysis, and persistence for ccupp."""
 import os
+import re
 import json
 import glob
-from datetime import datetime
+import hashlib
+import subprocess
+from datetime import datetime, timezone
 
 # Rough Anthropic list prices, USD per 1M tokens. Approximate; edit as prices change.
 PRICES = {
@@ -203,6 +206,95 @@ def _write_json(path, data):
     os.replace(tmp, path)
 
 
+# ---- project identity (cross-rename) ----
+
+_REMOTE_PREFIX = re.compile(r"^(https?|ssh|git)://", re.I)
+
+
+def _ccupp_home():
+    return os.environ.get("CCUPP_HOME") or os.path.join(os.path.expanduser("~"), ".ccupp")
+
+
+def _registry_path():
+    return os.path.join(_ccupp_home(), "registry.json")
+
+
+def _load_registry():
+    data = _read_json(_registry_path())
+    if not isinstance(data, dict) or not isinstance(data.get("projects"), dict):
+        return {"version": 1, "projects": {}}
+    return data
+
+
+def _save_registry(reg):
+    _write_json(_registry_path(), reg)
+
+
+def _register_dir(identity, transcript_dir, display_name=None):
+    if not identity or not transcript_dir:
+        return
+    reg = _load_registry()
+    entry = reg["projects"].setdefault(identity, {"transcript_dirs": []})
+    dirs = entry.setdefault("transcript_dirs", [])
+    norm = os.path.abspath(transcript_dir)
+    if norm not in dirs:
+        dirs.append(norm)
+    if display_name and not entry.get("display_name"):
+        entry["display_name"] = display_name
+    entry["last_seen"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _save_registry(reg)
+
+
+def _dirs_for_identity(identity):
+    if not identity:
+        return []
+    reg = _load_registry()
+    entry = (reg.get("projects") or {}).get(identity) or {}
+    return [d for d in (entry.get("transcript_dirs") or []) if isinstance(d, str)]
+
+
+def _git(cwd, args):
+    try:
+        r = subprocess.run(
+            ["git", "-C", cwd, *args],
+            capture_output=True, text=True, timeout=2, check=False,
+        )
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+    return None
+
+
+def _normalize_remote(url):
+    u = (url or "").strip().lower()
+    if not u:
+        return ""
+    if u.endswith(".git"):
+        u = u[:-4]
+    if u.startswith("git@"):
+        u = u[4:].replace(":", "/", 1)
+    u = _REMOTE_PREFIX.sub("", u)
+    return u.rstrip("/")
+
+
+def project_identity(cwd):
+    """Stable project ID across folder renames. None if no git info."""
+    if not cwd or not isinstance(cwd, str) or not os.path.isdir(cwd):
+        return None
+    url = _git(cwd, ["config", "--get", "remote.origin.url"])
+    if url:
+        norm = _normalize_remote(url)
+        if norm:
+            return "remote:" + hashlib.sha1(norm.encode("utf-8")).hexdigest()[:16]
+    first = _git(cwd, ["rev-list", "--max-parents=0", "HEAD"])
+    if first:
+        shas = sorted(s for s in first.split() if s)
+        if shas:
+            return "commit:" + shas[0][:16]
+    return None
+
+
 def compute_live_snapshot(transcript_path, total_cost_usd, total_api_ms):
     objs = list(iter_jsonl(transcript_path))
     return {
@@ -225,7 +317,28 @@ def compute_backfill_snapshot(transcript_path):
     }
 
 
-def project_totals(transcript_path, session_id, total_cost_usd, total_api_ms):
+def _accumulate_dir_snaps(project_dir, skip_session_id, snaps):
+    sessions_dir = os.path.join(project_dir, ".ccupp", "sessions")
+    for tp in glob.glob(os.path.join(project_dir, "*.jsonl")):
+        stem = os.path.splitext(os.path.basename(tp))[0]
+        if stem == skip_session_id or stem in snaps:
+            continue
+        snap_path = os.path.join(sessions_dir, stem + ".json")
+        snap = _read_json(snap_path)
+        if snap is None:
+            snap = compute_backfill_snapshot(tp)
+            _write_json(snap_path, snap)
+        snaps[stem] = snap
+    for sp in glob.glob(os.path.join(sessions_dir, "*.json")):
+        stem = os.path.splitext(os.path.basename(sp))[0]
+        if stem == skip_session_id or stem in snaps:
+            continue
+        snap = _read_json(sp)
+        if snap:
+            snaps[stem] = snap
+
+
+def project_totals(transcript_path, session_id, total_cost_usd, total_api_ms, cwd=None):
     project_dir = os.path.dirname(transcript_path)
     sessions_dir = os.path.join(project_dir, ".ccupp", "sessions")
     snaps = {}
@@ -234,26 +347,22 @@ def project_totals(transcript_path, session_id, total_cost_usd, total_api_ms):
     snaps[session_id] = compute_live_snapshot(transcript_path, total_cost_usd, total_api_ms)
     _write_json(os.path.join(sessions_dir, session_id + ".json"), snaps[session_id])
 
-    # other transcripts: load snapshot or lazily backfill
-    for tp in glob.glob(os.path.join(project_dir, "*.jsonl")):
-        stem = os.path.splitext(os.path.basename(tp))[0]
-        if stem == session_id:
-            continue
-        snap_path = os.path.join(sessions_dir, stem + ".json")
-        snap = _read_json(snap_path)
-        if snap is None:
-            snap = compute_backfill_snapshot(tp)
-            _write_json(snap_path, snap)
-        snaps[stem] = snap
+    identity = project_identity(cwd) if cwd else None
+    if identity:
+        display = None
+        try:
+            display = os.path.basename(os.path.abspath(cwd).rstrip("/")) or None
+        except (OSError, TypeError):
+            pass
+        _register_dir(identity, project_dir, display_name=display)
+        dirs = _dirs_for_identity(identity)
+        if project_dir not in dirs:
+            dirs.append(project_dir)
+    else:
+        dirs = [project_dir]
 
-    # snapshots whose transcript no longer exists still count
-    for sp in glob.glob(os.path.join(sessions_dir, "*.json")):
-        stem = os.path.splitext(os.path.basename(sp))[0]
-        if stem in snaps:
-            continue
-        snap = _read_json(sp)
-        if snap:
-            snaps[stem] = snap
+    for d in dirs:
+        _accumulate_dir_snaps(d, session_id if d == project_dir else None, snaps)
 
     totals = {"tokens": 0, "utterances": 0, "cost_usd": 0.0, "api_ms": 0}
     for s in snaps.values():

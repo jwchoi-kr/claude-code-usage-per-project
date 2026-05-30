@@ -4,9 +4,11 @@ import json
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ccupp_export
+import ccupp_core as core
 
 
 def _user(text=None, content=None, pid=None, meta=False, side=False, ts=None):
@@ -176,6 +178,63 @@ class TestBuildAndRender(unittest.TestCase):
         self.assertIn("1 sessions", md)
         self.assertIn("## Session 1 ·", md)
         self.assertNotIn("## Session 2", md)
+
+
+class TestBuildSessionsCrossDir(unittest.TestCase):
+    def setUp(self):
+        self.home = tempfile.mkdtemp()
+        self.prev_home = os.environ.get("CCUPP_HOME")
+        os.environ["CCUPP_HOME"] = self.home
+        self.dirA = tempfile.mkdtemp()
+        self.dirB = tempfile.mkdtemp()
+
+    def tearDown(self):
+        if self.prev_home is None:
+            os.environ.pop("CCUPP_HOME", None)
+        else:
+            os.environ["CCUPP_HOME"] = self.prev_home
+        shutil.rmtree(self.home, ignore_errors=True)
+        shutil.rmtree(self.dirA, ignore_errors=True)
+        shutil.rmtree(self.dirB, ignore_errors=True)
+
+    def test_build_sessions_with_identity_pulls_from_all_registered_dirs(self):
+        _write_jsonl(os.path.join(self.dirA, "old.jsonl"), [
+            _user("이전 폴더 프롬프트", pid="o", ts="2026-01-01T00:00:00.000Z"),
+        ])
+        _write_jsonl(os.path.join(self.dirB, "new.jsonl"), [
+            _user("새 폴더 프롬프트", pid="n", ts="2026-01-02T00:00:00.000Z"),
+        ])
+        core._register_dir("commit:proj", self.dirA)
+        core._register_dir("commit:proj", self.dirB)
+
+        sessions = ccupp_export.build_sessions(self.dirB, identity="commit:proj")
+        texts = [s["prompts"][0]["text"] for s in sessions]
+        # earliest first
+        self.assertEqual(texts, ["이전 폴더 프롬프트", "새 폴더 프롬프트"])
+
+    def test_export_uses_identity_to_aggregate(self):
+        # Old dir holds the project_dir keyed by encoded cwd.
+        encoded = ccupp_export.encode_cwd(self.dirA)
+        old_proj = os.path.join(self.dirA, encoded)
+        os.makedirs(old_proj)
+        _write_jsonl(os.path.join(old_proj, "old.jsonl"), [
+            _user("이전 프롬프트", pid="o", ts="2026-01-01T00:00:00.000Z"),
+        ])
+        # New dir simulates the renamed project's transcripts.
+        _write_jsonl(os.path.join(self.dirB, "new.jsonl"), [
+            _user("새 프롬프트", pid="n", ts="2026-01-02T00:00:00.000Z"),
+        ])
+        core._register_dir("commit:proj", old_proj)
+        core._register_dir("commit:proj", self.dirB)
+
+        with patch.object(core, "project_identity", return_value="commit:proj"):
+            out_path, n_sessions, n_prompts = ccupp_export.export(self.dirA, self.dirA)
+        with open(out_path, encoding="utf-8") as f:
+            md = f.read()
+        self.assertEqual(n_sessions, 2)
+        self.assertEqual(n_prompts, 2)
+        self.assertIn("이전 프롬프트", md)
+        self.assertIn("새 프롬프트", md)
 
 
 class TestExportEndToEnd(unittest.TestCase):
