@@ -4,6 +4,7 @@ import json
 import shutil
 import tempfile
 import unittest
+import unittest.mock
 from contextlib import redirect_stdout
 import io
 
@@ -140,6 +141,47 @@ class TestExportDispatch(unittest.TestCase):
             sys.argv = old_argv
             ccupp_export.run = orig
         self.assertEqual(captured["argv"], ["-o", "OUT.md"])
+
+
+class TestInstall(unittest.TestCase):
+    def test_install_writes_status_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = os.path.join(tmp, "settings.json")
+            old_argv = sys.argv
+            sys.argv = ["/usr/local/bin/ccupp", "install"]
+            buf = io.StringIO()
+            try:
+                with unittest.mock.patch("os.path.expanduser", return_value=settings_path), \
+                     unittest.mock.patch("shutil.which", return_value="/usr/local/bin/ccupp"), \
+                     redirect_stdout(buf):
+                    ccupp.main()
+            finally:
+                sys.argv = old_argv
+            with open(settings_path) as f:
+                settings = json.load(f)
+            self.assertEqual(settings["statusLine"]["type"], "command")
+            self.assertEqual(settings["statusLine"]["command"], "/usr/local/bin/ccupp")
+            self.assertEqual(settings["statusLine"]["padding"], 0)
+
+    def test_install_preserves_existing_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = os.path.join(tmp, "settings.json")
+            with open(settings_path, "w") as f:
+                json.dump({"permissions": {"allow": ["Bash(git*)"]}}, f)
+            old_argv = sys.argv
+            sys.argv = ["/usr/local/bin/ccupp", "install"]
+            buf = io.StringIO()
+            try:
+                with unittest.mock.patch("os.path.expanduser", return_value=settings_path), \
+                     unittest.mock.patch("shutil.which", return_value="/usr/local/bin/ccupp"), \
+                     redirect_stdout(buf):
+                    ccupp.main()
+            finally:
+                sys.argv = old_argv
+            with open(settings_path) as f:
+                settings = json.load(f)
+            self.assertEqual(settings["permissions"]["allow"], ["Bash(git*)"])
+            self.assertIn("statusLine", settings)
 
 
 class TestReportDispatch(unittest.TestCase):

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ccupp"
+version = "0.1.0"
+description = "Claude Code usage-per-project status line and tracker"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+keywords = ["claude", "claude-code", "ai", "usage", "status-line"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Environment :: Console",
+]
+
+[project.scripts]
+ccupp = "ccupp:main"
+
+[tool.setuptools]
+py-modules = ["ccupp", "ccupp_core", "ccupp_export", "ccupp_report"]

@@ -42,8 +42,27 @@ def render_line2(project_name, totals):
     return "  " + "  ".join(parts)
 
 
+def _install():
+    import shutil
+    settings_path = os.path.expanduser("~/.claude/settings.json")
+    ccupp_bin = shutil.which("ccupp") or os.path.abspath(sys.argv[0])
+    if os.path.exists(settings_path):
+        with open(settings_path) as f:
+            settings = json.load(f)
+    else:
+        settings = {}
+    settings["statusLine"] = {"type": "command", "command": ccupp_bin, "padding": 0}
+    with open(settings_path, "w") as f:
+        json.dump(settings, f, indent=2)
+        f.write("\n")
+    print(f"statusLine configured: {ccupp_bin}")
+    print("Restart Claude Code to apply.")
+
+
 def main():
     argv = sys.argv[1:]
+    if argv and argv[0] == "install":
+        return _install()
     if argv and argv[0] == "--export":
         sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
         import ccupp_export

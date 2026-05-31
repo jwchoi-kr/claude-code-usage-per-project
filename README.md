@@ -56,15 +56,37 @@ Exports every human prompt you typed (filtering out tool results, system message
 
 ## Installation
 
-**Requirements:** Python 3.8+ (stdlib only, no dependencies)
+**Requirements:** Python 3.9+ (stdlib only, no dependencies)
 
-**1. Clone the repo:**
+### Option A — pip (recommended)
 
 ```bash
-git clone https://github.com/yourusername/claude-code-usage-per-project.git ~/tools/ccupp
+pip install git+https://github.com/jwchoi-kr/claude-code-usage-per-project.git
 ```
 
-**2. Wire up the status line** in `~/.claude/settings.json`:
+This installs the `ccupp` command to your PATH. Use `which ccupp` to find the installed path for the next step.
+
+**Wire up the status line** in `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "/path/to/ccupp",
+    "padding": 0
+  }
+}
+```
+
+Use the full path returned by `which ccupp` (e.g. `/Users/you/.pyenv/shims/ccupp`) to avoid PATH issues when Claude Code invokes the hook.
+
+### Option B — clone manually
+
+```bash
+git clone https://github.com/jwchoi-kr/claude-code-usage-per-project.git ~/tools/ccupp
+```
+
+Wire up the status line in `~/.claude/settings.json`:
 
 ```json
 {
@@ -76,12 +98,10 @@ git clone https://github.com/yourusername/claude-code-usage-per-project.git ~/to
 }
 ```
 
-Use a pinned Python path (e.g. `/Users/you/.pyenv/shims/python3`) to avoid PATH issues.
-
-**3. Optional: add a shell alias** for the report and export commands:
+Add a shell alias for the report and export commands:
 
 ```bash
-alias ccupp='python3 /path/to/ccupp/ccupp.py'
+alias ccupp='python3 ~/tools/ccupp/ccupp.py'
 ```
 
 ## How it works
