@@ -2,30 +2,40 @@
 
 ## What this project is
 
-A Claude Code status line + usage tracker. Three modes across three scripts:
+A Claude Code status line + usage tracker. `ccupp.py` is a thin entry point: `main()`
+dispatches by argv/TTY to one of four modes, each living in its own module:
 
-1. **Status line** — `ccupp.py` piped from Claude Code's `statusLine` hook; reads JSON from stdin, prints a 2-line HUD
-2. **Usage report** — `ccupp_report.py` run bare in a terminal (TTY); prints a per-session table for the current project
-3. **Export** — `ccupp.py --export`; delegates to `ccupp_export.py` and writes `PROMPTS.md`
+1. **Status line** — bare `ccupp` piped from Claude Code's `statusLine` hook (stdin is not a TTY); `main()` reads JSON from stdin and delegates rendering to `ccupp_status_line.py`, which prints a 2-line HUD
+2. **Usage report** — bare `ccupp` run in a terminal (TTY); `ccupp_report.py` prints a per-session table for the current project
+3. **All-projects comparison** — `ccupp --all`; `ccupp_all.py` prints a per-project comparison table across every tracked project
+4. **Export** — `ccupp --export`; `ccupp_export.py` writes `PROMPTS.md`
+
+Each user-facing mode is its own module. `ccupp_core.py` holds only what is *shared*
+across modes (data analysis, persistence, shared formatters). `ccupp_status_line.py`
+holds status-line presentation. Keep mode-specific logic out of `ccupp_core.py`.
 
 ## File structure
 
 ```
-ccupp.py              Status line rendering + main() dispatcher
-ccupp_core.py         Shared utilities, data analysis, persistence
-ccupp_report.py       Terminal usage report (TTY mode)
-ccupp_export.py       Prompt extraction and Markdown export
-test_ccupp.py         Tests for ccupp.py
-test_ccupp_core.py    Tests for ccupp_core.py
-test_ccupp_report.py  Tests for ccupp_report.py
-test_ccupp_export.py  Tests for ccupp_export.py
-docs/                 Historical planning/spec docs — treat as context only
+ccupp.py                   main() dispatcher + install command
+ccupp_status_line.py       Status line rendering (2-line HUD)
+ccupp_core.py              Shared utilities, data analysis, persistence, table renderer
+ccupp_report.py            Terminal usage report — current project (TTY mode)
+ccupp_all.py               All-projects comparison report (--all)
+ccupp_export.py            Prompt extraction and Markdown export (--export)
+test_ccupp.py              Tests for ccupp.py (dispatch + install)
+test_ccupp_status_line.py  Tests for ccupp_status_line.py
+test_ccupp_core.py         Tests for ccupp_core.py
+test_ccupp_report.py       Tests for ccupp_report.py
+test_ccupp_all.py          Tests for ccupp_all.py
+test_ccupp_export.py       Tests for ccupp_export.py
+docs/                      Historical planning/spec docs — treat as context only
 ```
 
 ## Running tests
 
 ```bash
-python3 -m unittest test_ccupp test_ccupp_core test_ccupp_report test_ccupp_export -v
+python3 -m unittest test_ccupp test_ccupp_status_line test_ccupp_core test_ccupp_report test_ccupp_all test_ccupp_export -v
 ```
 
 No external dependencies for runtime or tests. The only network call is the LiteLLM pricing fetch in `_load_pricing_map()`, which is cached to disk and gated by tests via `_PRICING_CACHE`.
@@ -38,9 +48,9 @@ No external dependencies for runtime or tests. The only network call is the Lite
 
 **Deduplication by `(message.id, requestId)`** with sidechain fallback to `message.id` alone. Claude Code streams multiple lines per request and may emit sidechain copies of the same message. Tie-breaking when keys collide (in `_should_replace`): non-sidechain wins over sidechain → larger token total wins → entry with `speed` info wins. `sum_unique_tokens` and `estimate_cost` share this dedup via `_dedupe_assistants`.
 
-**`main()` must never raise**. The `except Exception: pass` block around line-2 rendering is intentional — if the status line crashes, Claude Code shows a blank line, which breaks the UI for the whole session.
+**The status line must never raise**. `ccupp_status_line.render()` always emits line 1, then wraps line-2 (project totals) rendering in `except Exception: pass` — if the status line crashes, Claude Code shows a blank line, which breaks the UI for the whole session.
 
-**The `--export` flag is handled before the TTY check** in `main()`. Order matters.
+**The `--export` and `--all` flags are handled before the TTY check** in `main()`. Order matters.
 
 ## Architecture decisions
 
@@ -60,7 +70,8 @@ Pricing is loaded from `https://raw.githubusercontent.com/BerriAI/litellm/main/m
 
 ## Adding features
 
-- New formatting helpers belong in `ccupp_core.py` alongside `format_tokens`, `format_duration`
+- Shared formatting/data helpers belong in `ccupp_core.py` alongside `format_tokens`, `format_duration`, `_box_table`. Logic used by only one mode belongs in that mode's module, not `ccupp_core.py`
+- Status-line-only presentation (bars, colors, line layout) belongs in `ccupp_status_line.py`
 - New export filters go in the `UI_SLASH` set or `classify()` function in `ccupp_export.py`
 - Every new function needs a test in the corresponding test file
-- The status line output format (line 1 / line 2) is tested in `TestRenderLine1` / `TestRenderLine2` — update those tests if the format changes
+- The status line output format (line 1 / line 2) is tested in `TestRenderLine1` / `TestRenderLine2` in `test_ccupp_status_line.py` — update those tests if the format changes
