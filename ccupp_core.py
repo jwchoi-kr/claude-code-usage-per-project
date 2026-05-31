@@ -56,19 +56,27 @@ def format_duration(ms):
     return f"{secs // 3600}h{(secs % 3600) // 60:02d}m"
 
 
-def render_bar(pct, width=10):
-    pct = max(0, min(100, int(pct or 0)))
-    filled = pct * width // 100
-    return "█" * filled + "░" * (width - filled)
+_DIM = "\033[2m"
+_RESET = "\033[0m"
 
 
-def bar_color(pct):
-    pct = int(pct or 0)
-    if pct >= 90:
-        return "\033[31m"
-    if pct >= 70:
-        return "\033[33m"
-    return "\033[32m"
+def _box_table(headers, body, total, aligns):
+    cols = list(zip(*([headers] + body + [total])))
+    widths = [max(len(c) for c in col) for col in cols]
+    bar = f"{_DIM}│{_RESET}"
+
+    def row(cells):
+        out = [c.ljust(w) if a == "left" else c.rjust(w)
+               for c, w, a in zip(cells, widths, aligns)]
+        return f"{bar} " + f" {bar} ".join(out) + f" {bar}"
+
+    def rule(left, mid, right):
+        return f"{_DIM}{left}{mid.join('─' * (w + 2) for w in widths)}{right}{_RESET}"
+
+    lines = [rule("╭", "┬", "╮"), row(headers), rule("├", "┼", "┤")]
+    lines += [row(b) for b in body]
+    lines += [rule("├", "┼", "┤"), row(total), rule("╰", "┴", "╯")]
+    return "\n".join(lines)
 
 
 def iter_jsonl(path):

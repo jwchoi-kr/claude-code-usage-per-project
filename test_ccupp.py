@@ -39,40 +39,6 @@ def _write_jsonl(path, objs):
             f.write(json.dumps(o) + "\n")
 
 
-class TestRenderLine1(unittest.TestCase):
-    def test_full(self):
-        data = {
-            "model": {"display_name": "Opus 4.7"},
-            "effort": {"level": "xhigh"},
-            "context_window": {"used_percentage": 38},
-        }
-        out = ccupp.render_line1(data)
-        self.assertIn("Opus 4.7", out)
-        self.assertNotIn("◈", out)
-        self.assertIn(ccupp._tag("xhigh"), out)
-        self.assertIn("38%", out)
-        self.assertIn("█" * 3, out)
-        self.assertIn(ccupp.CYAN, out)
-        self.assertIn(f"{ccupp.DIM}ctx{ccupp.RESET}", out)
-
-    def test_missing_effort_and_null_pct(self):
-        data = {"model": {"display_name": "Sonnet 4.6"}, "context_window": {"used_percentage": None}}
-        out = ccupp.render_line1(data)
-        self.assertIn("Sonnet 4.6", out)
-        self.assertNotIn("◈", out)
-        self.assertNotIn(f"{ccupp.DIM}[{ccupp.RESET}", out.split("ctx")[0])  # no effort tag
-        self.assertIn("0%", out)
-
-
-class TestRenderLine2(unittest.TestCase):
-    def test_format(self):
-        totals = {"utterances": 12, "tokens": 84200, "cost_usd": 1.83, "api_ms": 372_000}
-        out = ccupp.render_line2("demo", totals)
-        t = ccupp._tag
-        expected = "  " + "  ".join(["demo", t("12 msg"), t("84.2k tok"), t("$1.83"), t("6m12s")])
-        self.assertEqual(out, expected)
-
-
 class TestMain(unittest.TestCase):
     def setUp(self):
         self.proj = tempfile.mkdtemp()
@@ -141,6 +107,23 @@ class TestExportDispatch(unittest.TestCase):
             sys.argv = old_argv
             ccupp_export.run = orig
         self.assertEqual(captured["argv"], ["-o", "OUT.md"])
+
+
+class TestAllDispatch(unittest.TestCase):
+    def test_all_flag_dispatches_to_ccupp_all_run(self):
+        import ccupp_all
+        orig = ccupp_all.run
+        ccupp_all.run = lambda *a, **kw: print("ALLPROJECTS")
+        old_stdin, old_argv = sys.stdin, sys.argv
+        sys.stdin, sys.argv = io.StringIO(""), ["ccupp", "--all"]
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf):
+                ccupp.main()
+        finally:
+            sys.stdin, sys.argv = old_stdin, old_argv
+            ccupp_all.run = orig
+        self.assertIn("ALLPROJECTS", buf.getvalue())
 
 
 class TestInstall(unittest.TestCase):

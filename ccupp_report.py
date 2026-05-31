@@ -6,7 +6,7 @@ import glob
 from ccupp_core import (
     iter_jsonl, _parse_ts, _read_json, _write_json,
     compute_backfill_snapshot, format_tokens, format_duration,
-    project_identity, _dirs_for_identity,
+    project_identity, _dirs_for_identity, _box_table,
 )
 
 
@@ -55,29 +55,6 @@ def collect_session_rows(project_dir, identity=None):
 def _fmt_date(ts):
     d = _parse_ts(ts)
     return d.astimezone().strftime("%Y-%m-%d %H:%M") if d else "—"
-
-
-_DIM = "\033[2m"
-_RESET = "\033[0m"
-
-
-def _box_table(headers, body, total, aligns):
-    cols = list(zip(*([headers] + body + [total])))
-    widths = [max(len(c) for c in col) for col in cols]
-    bar = f"{_DIM}│{_RESET}"
-
-    def row(cells):
-        out = [c.ljust(w) if a == "left" else c.rjust(w)
-               for c, w, a in zip(cells, widths, aligns)]
-        return f"{bar} " + f" {bar} ".join(out) + f" {bar}"
-
-    def rule(left, mid, right):
-        return f"{_DIM}{left}{mid.join('─' * (w + 2) for w in widths)}{right}{_RESET}"
-
-    lines = [rule("╭", "┬", "╮"), row(headers), rule("├", "┼", "┤")]
-    lines += [row(b) for b in body]
-    lines += [rule("├", "┼", "┤"), row(total), rule("╰", "┴", "╯")]
-    return "\n".join(lines)
 
 
 def render_report(project_dir=None, cwd=None):

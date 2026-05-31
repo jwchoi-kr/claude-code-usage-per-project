@@ -110,21 +110,6 @@ class TestFormatDuration(unittest.TestCase):
         self.assertEqual(core.format_duration(None), "0m00s")
 
 
-class TestBar(unittest.TestCase):
-    def test_render_bar(self):
-        self.assertEqual(core.render_bar(0), "░" * 10)
-        self.assertEqual(core.render_bar(38), "█" * 3 + "░" * 7)
-        self.assertEqual(core.render_bar(100), "█" * 10)
-        self.assertEqual(core.render_bar(None), "░" * 10)
-        self.assertEqual(core.render_bar(150), "█" * 10)  # clamps
-
-    def test_bar_color(self):
-        self.assertEqual(core.bar_color(50), "\033[32m")   # green
-        self.assertEqual(core.bar_color(70), "\033[33m")   # yellow
-        self.assertEqual(core.bar_color(89), "\033[33m")
-        self.assertEqual(core.bar_color(90), "\033[31m")   # red
-
-
 class TestIterJsonl(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()

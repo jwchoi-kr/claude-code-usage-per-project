@@ -4,3 +4,4 @@ __pycache__/
 dist/
 .ccupp/
 PROMPTS.md
+.history
