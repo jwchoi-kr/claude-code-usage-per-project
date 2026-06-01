@@ -52,6 +52,8 @@ No external dependencies for runtime or tests. The only network call is the Lite
 
 **Snapshot storage path is `.ccupp/sessions/`** inside the project's Claude transcript directory. The test suite asserts this path. Don't rename it without updating tests.
 
+**Backfill snapshots are a cache keyed by transcript size, not a write-once file.** A backfill snapshot (`estimated: true`) records the source `.jsonl`'s byte size in `src_size`. On read, `_read_or_backfill_snapshot` recomputes it whenever the (append-only) transcript's size differs — including legacy snapshots with no `src_size`. Without this, a snapshot frozen mid-session permanently under-reports while the transcript keeps growing, so `ccupp`/`--all`/report would disagree with the recompute-based `--daily`/`--model`. Live snapshots (`estimated: false`) carry exact stdin cost/time and are deliberately **never** invalidated here — the status line overwrites them each render.
+
 **Token counting includes all four token types** — `input`, `output`, `cache_creation_input`, `cache_read_input` — matching ccusage. See `sum_unique_tokens()` in `ccupp_core.py`.
 
 **Deduplication by `(message.id, requestId)`** with sidechain fallback to `message.id` alone. Claude Code streams multiple lines per request and may emit sidechain copies of the same message. Tie-breaking when keys collide (in `_should_replace`): non-sidechain wins over sidechain → larger token total wins → entry with `speed` info wins. `sum_unique_tokens`, `estimate_cost`, `aggregate_by_day`, and `aggregate_by_model` all share this dedup via `_dedupe_assistants`, so per-day / per-model totals reconcile with the session totals.
@@ -65,7 +67,7 @@ No external dependencies for runtime or tests. The only network call is the Lite
 ## Architecture decisions
 
 **Why per-session snapshot files instead of a single accumulated counter?**
-The status line fires after every assistant response, not once per session. A single counter would require atomic read-modify-write (race condition risk with concurrent sessions) and would double-count if re-run. One file per session, overwritten each render, is idempotent and concurrent-safe.
+The status line fires after every assistant response, not once per session. A single counter would require atomic read-modify-write (race condition risk with concurrent sessions) and would double-count if re-run. One file per session, overwritten each render, is idempotent and concurrent-safe. A backfill snapshot for a *non-current* session is just a cache of `compute_backfill_snapshot(transcript)`; it is invalidated by `src_size` so it can't go stale while the session keeps streaming (see Key invariants).
 
 **Why is `workspace.project_dir` used for the project name instead of `dirname(transcript_path)`?**
 `transcript_path` is inside `~/.claude/projects/...`, not the actual working directory. `workspace.project_dir` is the actual project folder.

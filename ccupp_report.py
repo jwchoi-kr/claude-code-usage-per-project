@@ -4,8 +4,8 @@ import sys
 import glob
 
 from ccupp_core import (
-    iter_jsonl, _parse_ts, _read_json, _write_json,
-    compute_backfill_snapshot, format_tokens, format_duration,
+    iter_jsonl, _parse_ts, _read_json,
+    _read_or_backfill_snapshot, format_tokens, format_duration,
     project_identity, _dirs_for_identity, _box_table,
 )
 
@@ -37,10 +37,7 @@ def collect_session_rows(project_dir, identity=None):
             if sid in rows:
                 continue
             snap_path = os.path.join(sessions_dir, sid + ".json")
-            snap = _read_json(snap_path)
-            if snap is None:
-                snap = compute_backfill_snapshot(tp)
-                _write_json(snap_path, snap)
+            snap = _read_or_backfill_snapshot(tp, snap_path)
             rows[sid] = {"sid": sid, "first_ts": _first_timestamp(tp), "snap": snap}
         for sp in glob.glob(os.path.join(sessions_dir, "*.json")):
             sid = os.path.splitext(os.path.basename(sp))[0]

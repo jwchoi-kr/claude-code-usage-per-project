@@ -29,12 +29,15 @@ class TestReport(unittest.TestCase):
     def _snap(self, sid, est, u, t, c, ms, ts=None):
         sd = os.path.join(self.proj, ".ccupp", "sessions")
         os.makedirs(sd, exist_ok=True)
-        with open(os.path.join(sd, sid + ".json"), "w") as f:
-            json.dump({"tokens": t, "utterances": u, "cost_usd": c,
-                       "api_ms": ms, "estimated": est}, f)
+        snap = {"tokens": t, "utterances": u, "cost_usd": c,
+                "api_ms": ms, "estimated": est}
         if ts:
-            _write_jsonl(os.path.join(self.proj, sid + ".jsonl"),
-                         [{"type": "user", "timestamp": ts, "message": {"content": "hi"}}])
+            tp = os.path.join(self.proj, sid + ".jsonl")
+            _write_jsonl(tp, [{"type": "user", "timestamp": ts,
+                               "message": {"content": "hi"}}])
+            snap["src_size"] = os.path.getsize(tp)  # mark backfill cache fresh
+        with open(os.path.join(sd, sid + ".json"), "w") as f:
+            json.dump(snap, f)
 
     def test_table_rows_total_marker_and_skip_empty(self):
         self._snap("aaaaaaaa", True, 10, 1000, 1.0, 60_000, ts="2026-05-30T02:00:00Z")

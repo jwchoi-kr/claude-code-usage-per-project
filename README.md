@@ -153,6 +153,8 @@ Generated 2026-05-30 12:00 · 2 sessions · 3 prompts
 
 Each session writes a snapshot file to `.ccupp/sessions/<session_id>.json` inside the Claude transcript directory. The current session's snapshot is overwritten on every render (idempotent). Past sessions without a snapshot are backfill-estimated from the raw `.jsonl` transcript — these are marked with `~` in the report, and their cost and time are approximate.
 
+A backfill snapshot is a cache, not a write-once file: it records the byte size of the transcript it was computed from (`src_size`), and is recomputed whenever the transcript grows past that size. This keeps backfill totals consistent with the `--daily`/`--model` recompute even if a session's snapshot was first written mid-session. Live snapshots (exact cost/time from Claude Code's stdin) are never invalidated.
+
 To accumulate totals across sessions, ccupp resolves a stable project identity from git:
 
 1. **Remote URL** — normalized and SHA-1 hashed (`remote:<hash>`)

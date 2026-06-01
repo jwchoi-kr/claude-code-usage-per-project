@@ -609,5 +609,90 @@ class TestProjectTotalsCrossDir(unittest.TestCase, _CcuppHomeIsolation):
         self.assertEqual(totals["tokens"], 30)
 
 
+class TestBackfillSnapshotStaleness(unittest.TestCase, _PricingIsolation):
+    def setUp(self):
+        self._set_pricing()
+        self.proj = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.proj, ignore_errors=True)
+        self._restore_pricing()
+
+    def _append(self, path, objs):
+        with open(path, "a") as f:
+            for o in objs:
+                f.write(json.dumps(o) + "\n")
+
+    def test_stale_backfill_recomputed_when_jsonl_grows(self):
+        tp = os.path.join(self.proj, "sessX.jsonl")
+        _write_jsonl(tp, [
+            {"type": "user", "promptId": "p1", "message": {"content": "hi"}},
+            _assistant("r1", inp=10, cc=100, cr=1000, out=50, model="claude-opus-4-7"),
+        ])
+        snaps = {}
+        core._accumulate_dir_snaps(self.proj, None, snaps)
+        self.assertEqual(snaps["sessX"]["tokens"], 1160)
+
+        # Session keeps streaming after the first backfill was frozen.
+        self._append(tp, [
+            {"type": "user", "promptId": "p2", "message": {"content": "more"}},
+            _assistant("r2", inp=20, cc=200, cr=2000, out=30, model="claude-opus-4-7"),
+        ])
+        snaps2 = {}
+        core._accumulate_dir_snaps(self.proj, None, snaps2)
+        self.assertEqual(snaps2["sessX"]["tokens"], 1160 + 2250)
+        self.assertEqual(snaps2["sessX"]["utterances"], 2)
+
+    def test_legacy_backfill_without_src_size_is_refreshed(self):
+        # A snapshot frozen by older code (no src_size) that undercounts the
+        # now-larger transcript must be recomputed on next read.
+        tp = os.path.join(self.proj, "sessL.jsonl")
+        _write_jsonl(tp, [
+            {"type": "user", "promptId": "p1", "message": {"content": "hi"}},
+            _assistant("r1", inp=10, cc=100, cr=1000, out=50, model="claude-opus-4-7"),
+            _assistant("r2", inp=20, cc=200, cr=2000, out=30, model="claude-opus-4-7"),
+        ])
+        sd = os.path.join(self.proj, ".ccupp", "sessions")
+        os.makedirs(sd, exist_ok=True)
+        with open(os.path.join(sd, "sessL.json"), "w") as f:
+            json.dump({"tokens": 999, "utterances": 1, "cost_usd": 0.0,
+                       "api_ms": 0, "estimated": True}, f)  # legacy: no src_size
+        snaps = {}
+        core._accumulate_dir_snaps(self.proj, None, snaps)
+        self.assertEqual(snaps["sessL"]["tokens"], 1160 + 2250)
+        self.assertIn("src_size", snaps["sessL"])
+
+    def test_fresh_backfill_not_recomputed(self):
+        # Same size on re-read → cache hit, no rewrite needed.
+        tp = os.path.join(self.proj, "sessF.jsonl")
+        _write_jsonl(tp, [
+            {"type": "user", "promptId": "p1", "message": {"content": "hi"}},
+            _assistant("r1", inp=10, cc=100, cr=1000, out=50, model="claude-opus-4-7"),
+        ])
+        snaps = {}
+        core._accumulate_dir_snaps(self.proj, None, snaps)
+        snap_path = os.path.join(self.proj, ".ccupp", "sessions", "sessF.json")
+        mtime = os.path.getmtime(snap_path)
+        snaps2 = {}
+        core._accumulate_dir_snaps(self.proj, None, snaps2)
+        self.assertEqual(snaps2["sessF"]["tokens"], 1160)
+        self.assertEqual(os.path.getmtime(snap_path), mtime)  # not rewritten
+
+    def test_live_snapshot_not_invalidated_when_jsonl_grows(self):
+        # Live snapshots carry exact stdin cost and must survive a size change.
+        tp = os.path.join(self.proj, "sessV.jsonl")
+        _write_jsonl(tp, [
+            {"type": "user", "promptId": "p1", "message": {"content": "hi"}},
+            _assistant("r1", inp=10, cc=100, cr=1000, out=50, model="claude-opus-4-7"),
+        ])
+        core.project_totals(tp, "sessV", total_cost_usd=0.50, total_api_ms=60_000)
+        self._append(tp, [_assistant("r2", inp=20, cc=200, cr=2000, out=30,
+                                     model="claude-opus-4-7")])
+        snaps = {}
+        core._accumulate_dir_snaps(self.proj, None, snaps)
+        self.assertFalse(snaps["sessV"]["estimated"])
+        self.assertEqual(snaps["sessV"]["cost_usd"], 0.50)
+
+
 if __name__ == "__main__":
     unittest.main()

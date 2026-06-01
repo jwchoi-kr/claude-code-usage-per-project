@@ -683,6 +683,13 @@ def compute_live_snapshot(transcript_path, total_cost_usd, total_api_ms):
     }
 
 
+def _file_size(path):
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return None
+
+
 def compute_backfill_snapshot(transcript_path):
     objs = list(iter_jsonl(transcript_path))
     return {
@@ -691,7 +698,30 @@ def compute_backfill_snapshot(transcript_path):
         "cost_usd": estimate_cost(objs),
         "api_ms": estimate_api_ms(objs),
         "estimated": True,
+        "src_size": _file_size(transcript_path),
     }
+
+
+def _backfill_is_stale(snap, transcript_path):
+    """A cached backfill snapshot is stale when the append-only transcript has
+    changed size since it was computed. Live snapshots (estimated=False) carry
+    exact stdin cost/time and are never invalidated here. A missing src_size
+    (legacy snapshot) always counts as stale so old frozen caches self-heal."""
+    if not snap.get("estimated"):
+        return False
+    return snap.get("src_size") != _file_size(transcript_path)
+
+
+def _read_or_backfill_snapshot(transcript_path, snap_path):
+    """Snapshot for a transcript, recomputing a stale backfill cache.
+
+    compute_backfill_snapshot is a pure function of the transcript, so a size
+    change means the cache is stale and is recomputed + rewritten."""
+    snap = _read_json(snap_path)
+    if snap is None or _backfill_is_stale(snap, transcript_path):
+        snap = compute_backfill_snapshot(transcript_path)
+        _write_json(snap_path, snap)
+    return snap
 
 
 def _accumulate_dir_snaps(project_dir, skip_session_id, snaps):
@@ -701,11 +731,7 @@ def _accumulate_dir_snaps(project_dir, skip_session_id, snaps):
         if stem == skip_session_id or stem in snaps:
             continue
         snap_path = os.path.join(sessions_dir, stem + ".json")
-        snap = _read_json(snap_path)
-        if snap is None:
-            snap = compute_backfill_snapshot(tp)
-            _write_json(snap_path, snap)
-        snaps[stem] = snap
+        snaps[stem] = _read_or_backfill_snapshot(tp, snap_path)
     for sp in glob.glob(os.path.join(sessions_dir, "*.json")):
         stem = os.path.splitext(os.path.basename(sp))[0]
         if stem == skip_session_id or stem in snaps:
