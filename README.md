@@ -158,7 +158,7 @@ $ ccupp --version   # or -v
 
 ```
 $ ccupp --version
-ccupp 0.2.1
+ccupp 0.2.2
 ```
 
 ## How it works
