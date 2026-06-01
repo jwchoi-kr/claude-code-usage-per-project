@@ -35,6 +35,12 @@ def main():
     if argv and argv[0] == "--all":
         import ccupp_all
         return ccupp_all.run()
+    if argv and argv[0] == "--daily":
+        import ccupp_daily
+        return ccupp_daily.run()
+    if argv and argv[0] == "--model":
+        import ccupp_model
+        return ccupp_model.run()
     if sys.stdin.isatty():
         import ccupp_report
         return ccupp_report.run()

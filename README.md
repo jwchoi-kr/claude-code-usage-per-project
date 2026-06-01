@@ -42,7 +42,49 @@ myproject — Claude Code usage (per project)
   ~ = backfill estimate (cost·time approximate)
 ```
 
-### 3. All-projects comparison (run directly in terminal)
+### 3. Daily breakdown (run directly in terminal)
+
+```
+$ ccupp --daily
+```
+
+Same current-project scope as the usage report, but grouped by local calendar day instead of by session — recomputed from the raw transcripts so each request's tokens, cost, and time land on the day it happened:
+
+```
+myproject — Claude Code usage by day
+
+╭────────────┬──────────┬────────┬───────┬─────────╮
+│ DATE       │ USER_MSG │ TOKENS │  COST │    TIME │
+├────────────┼──────────┼────────┼───────┼─────────┤
+│ 2026-05-29 │        8 │  51.0k │ $0.94 │  4m30s  │
+│ 2026-05-30 │       12 │  84.2k │ $1.83 │  6m12s  │
+├────────────┼──────────┼────────┼───────┼─────────┤
+│ TOTAL      │       20 │ 135.2k │ $2.77 │ 10m42s  │
+╰────────────┴──────────┴────────┴───────┴─────────╯
+```
+
+### 4. Model breakdown (run directly in terminal)
+
+```
+$ ccupp --model
+```
+
+The current project's usage split per model, sorted by cost (highest first) — useful for seeing where spend concentrates between Opus, Sonnet, and Haiku:
+
+```
+myproject — Claude Code usage by model
+
+╭───────────────────┬──────┬────────┬───────╮
+│ MODEL             │ REQS │ TOKENS │  COST │
+├───────────────────┼──────┼────────┼───────┤
+│ claude-opus-4-7   │   38 │  96.1k │ $2.41 │
+│ claude-sonnet-4-6 │   21 │  39.1k │ $0.36 │
+├───────────────────┼──────┼────────┼───────┤
+│ TOTAL             │   59 │ 135.2k │ $2.77 │
+╰───────────────────┴──────┴────────┴───────╯
+```
+
+### 5. All-projects comparison (run directly in terminal)
 
 ```
 $ ccupp --all
@@ -64,7 +106,7 @@ Claude Code usage — all projects
 ╰───────────┴──────────┴──────────┴────────┴─────────┴───────╯
 ```
 
-### 4. Prompt export (run directly in terminal)
+### 6. Prompt export (run directly in terminal)
 
 ```
 $ ccupp --export
@@ -127,3 +169,5 @@ Modeled on [ccusage](https://github.com/ryoppippi/ccusage)'s approach:
 - **Tokens** — sum of `input`, `cache_creation_input`, `cache_read_input`, and `output` tokens across deduplicated assistant messages. Deduplication is by `(message.id, requestId)`; when keys collide, non-sidechain wins, then larger token total wins.
 - **Cost** — live sessions use `total_cost_usd` from Claude Code's stdin directly. Backfill uses ccusage Auto mode: `costUSD` field per entry if present, otherwise computed from tokens × per-model rates from [LiteLLM's pricing file](https://github.com/BerriAI/litellm), cached at `~/.ccupp/litellm-pricing.json` for 24h.
 - **Time** — live sessions use `total_api_ms` from stdin. Backfill estimates by measuring the gap between each user message timestamp and the last assistant message timestamp for the same `requestId`.
+
+The per-session report and all-projects comparison read these cached snapshots. The `--daily` and `--model` breakdowns instead recompute from the raw transcripts every time (snapshots only carry session totals, not per-day or per-model splits), reusing the same deduplication and Auto-mode cost model — so their totals reconcile with the per-session report. Dates in `--daily` are bucketed by your local timezone, matching the report's local-time dates.

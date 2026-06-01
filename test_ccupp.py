@@ -126,6 +126,40 @@ class TestAllDispatch(unittest.TestCase):
         self.assertIn("ALLPROJECTS", buf.getvalue())
 
 
+class TestDailyDispatch(unittest.TestCase):
+    def test_daily_flag_dispatches_to_ccupp_daily_run(self):
+        import ccupp_daily
+        orig = ccupp_daily.run
+        ccupp_daily.run = lambda *a, **kw: print("DAILYOUT")
+        old_stdin, old_argv = sys.stdin, sys.argv
+        sys.stdin, sys.argv = io.StringIO(""), ["ccupp", "--daily"]
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf):
+                ccupp.main()
+        finally:
+            sys.stdin, sys.argv = old_stdin, old_argv
+            ccupp_daily.run = orig
+        self.assertIn("DAILYOUT", buf.getvalue())
+
+
+class TestModelDispatch(unittest.TestCase):
+    def test_model_flag_dispatches_to_ccupp_model_run(self):
+        import ccupp_model
+        orig = ccupp_model.run
+        ccupp_model.run = lambda *a, **kw: print("MODELOUT")
+        old_stdin, old_argv = sys.stdin, sys.argv
+        sys.stdin, sys.argv = io.StringIO(""), ["ccupp", "--model"]
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf):
+                ccupp.main()
+        finally:
+            sys.stdin, sys.argv = old_stdin, old_argv
+            ccupp_model.run = orig
+        self.assertIn("MODELOUT", buf.getvalue())
+
+
 class TestInstall(unittest.TestCase):
     def test_install_writes_status_line(self):
         with tempfile.TemporaryDirectory() as tmp:

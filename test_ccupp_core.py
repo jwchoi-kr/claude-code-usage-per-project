@@ -340,6 +340,125 @@ class TestProjectTotals(unittest.TestCase, _PricingIsolation):
         self.assertEqual(t1, t2)
 
 
+class TestProjectTranscriptPaths(unittest.TestCase, _CcuppHomeIsolation):
+    def setUp(self):
+        self._isolate_home()
+        self.dirA = tempfile.mkdtemp()
+        self.dirB = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.dirA, ignore_errors=True)
+        shutil.rmtree(self.dirB, ignore_errors=True)
+        self._restore_home()
+
+    def test_single_dir_lists_jsonl(self):
+        _write_jsonl(os.path.join(self.dirA, "s1.jsonl"), [{"a": 1}])
+        _write_jsonl(os.path.join(self.dirA, "s2.jsonl"), [{"a": 2}])
+        paths = core.project_transcript_paths(self.dirA)
+        self.assertEqual(sorted(os.path.basename(p) for p in paths),
+                         ["s1.jsonl", "s2.jsonl"])
+
+    def test_merges_identity_dirs_and_dedups_by_session_id(self):
+        _write_jsonl(os.path.join(self.dirA, "shared.jsonl"), [{"a": 1}])
+        _write_jsonl(os.path.join(self.dirB, "shared.jsonl"), [{"a": 1}])  # dup sid
+        _write_jsonl(os.path.join(self.dirB, "onlyB.jsonl"), [{"a": 2}])
+        core._register_dir("commit:p1", self.dirA)
+        core._register_dir("commit:p1", self.dirB)
+        paths = core.project_transcript_paths(self.dirA, identity="commit:p1")
+        sids = sorted(os.path.splitext(os.path.basename(p))[0] for p in paths)
+        self.assertEqual(sids, ["onlyB", "shared"])  # shared counted once
+
+    def test_no_dir_returns_empty(self):
+        self.assertEqual(core.project_transcript_paths(None), [])
+
+
+class TestAggregateByModel(unittest.TestCase, _PricingIsolation):
+    def setUp(self):
+        self._set_pricing()
+
+    def tearDown(self):
+        self._restore_pricing()
+
+    def test_groups_dedups_and_costs_per_model(self):
+        objs = [
+            _assistant("r1", inp=1000, out=1000, model="claude-opus-4-7"),
+            _assistant("r1", inp=1000, out=1000, model="claude-opus-4-7"),  # streamed dup
+            _assistant("r2", inp=20, cc=200, cr=2000, out=30, model="claude-sonnet-4-5"),
+        ]
+        agg = core.aggregate_by_model(objs)
+        self.assertEqual(set(agg), {"claude-opus-4-7", "claude-sonnet-4-5"})
+        self.assertEqual(agg["claude-opus-4-7"]["reqs"], 1)
+        self.assertEqual(agg["claude-opus-4-7"]["tokens"], 2000)
+        self.assertAlmostEqual(agg["claude-opus-4-7"]["cost_usd"], 0.09, places=6)
+        self.assertEqual(agg["claude-sonnet-4-5"]["tokens"], 20 + 200 + 2000 + 30)
+        sonnet_cost = (20 * 3 + 200 * 3.75 + 2000 * 0.3 + 30 * 15) / 1_000_000
+        self.assertAlmostEqual(agg["claude-sonnet-4-5"]["cost_usd"], sonnet_cost, places=6)
+
+    def test_missing_model_bucketed_as_unknown(self):
+        objs = [_assistant("r1", inp=10, out=20, model=None)]
+        agg = core.aggregate_by_model(objs)
+        self.assertIn("unknown", agg)
+        self.assertEqual(agg["unknown"]["reqs"], 1)
+
+
+class TestAggregateByDay(unittest.TestCase, _PricingIsolation):
+    def setUp(self):
+        self._set_pricing()
+        self._prev_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "UTC"
+        time.tzset()
+
+    def tearDown(self):
+        if self._prev_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = self._prev_tz
+        time.tzset()
+        self._restore_pricing()
+
+    def test_buckets_tokens_cost_utterances_time_by_local_date(self):
+        objs = [
+            {"type": "user", "promptId": "p1", "message": {"content": "hi"},
+             "timestamp": "2026-01-01T10:00:00.000Z"},
+            _assistant("r1", inp=10, out=20, model="claude-opus-4-7",
+                       ts="2026-01-01T10:00:05.000Z"),
+            {"type": "user", "promptId": "p2", "message": {"content": "yo"},
+             "timestamp": "2026-01-02T09:00:00.000Z"},
+            _assistant("r2", inp=100, out=200, model="claude-opus-4-7",
+                       ts="2026-01-02T09:00:03.000Z"),
+        ]
+        days = core.aggregate_by_day(objs)
+        self.assertEqual(set(days), {"2026-01-01", "2026-01-02"})
+
+        d1 = days["2026-01-01"]
+        self.assertEqual(d1["utterances"], 1)
+        self.assertEqual(d1["tokens"], 30)
+        self.assertEqual(d1["api_ms"], 5000)
+        self.assertAlmostEqual(d1["cost_usd"], (10 * 15 + 20 * 75) / 1_000_000, places=6)
+
+        d2 = days["2026-01-02"]
+        self.assertEqual(d2["utterances"], 1)
+        self.assertEqual(d2["tokens"], 300)
+        self.assertEqual(d2["api_ms"], 3000)
+        self.assertAlmostEqual(d2["cost_usd"], (100 * 15 + 200 * 75) / 1_000_000, places=6)
+
+    def test_dedups_assistants_within_a_day(self):
+        objs = [
+            _assistant("r1", inp=1000, out=1000, model="claude-opus-4-7",
+                       ts="2026-03-01T12:00:00.000Z"),
+            _assistant("r1", inp=1000, out=1000, model="claude-opus-4-7",
+                       ts="2026-03-01T12:00:00.000Z"),  # streamed dup
+        ]
+        days = core.aggregate_by_day(objs)
+        self.assertEqual(days["2026-03-01"]["tokens"], 2000)
+
+    def test_entry_without_timestamp_bucketed_under_none(self):
+        objs = [_assistant("r1", inp=10, out=20, model="claude-opus-4-7")]
+        days = core.aggregate_by_day(objs)
+        self.assertIn(None, days)
+        self.assertEqual(days[None]["tokens"], 30)
+
+
 class TestNormalizeRemote(unittest.TestCase):
     def test_https_strip_dotgit(self):
         self.assertEqual(core._normalize_remote("https://github.com/u/repo.git"),

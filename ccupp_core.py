@@ -220,10 +220,14 @@ def _parse_ts(ts):
         return None
 
 
-def estimate_api_ms(objs):
+def _iter_request_times(objs):
+    """Yield (end_dt, ms, model) per request: the gap from the preceding user
+    message to the request's last assistant timestamp. Mirrors the response-time
+    estimate used for backfill snapshots."""
     objs = list(objs)
     first_idx = {}
     last_ts = {}
+    model_of = {}
     for i, o in enumerate(objs):
         if o.get("type") == "assistant" and o.get("requestId"):
             rid = o["requestId"]
@@ -231,7 +235,9 @@ def estimate_api_ms(objs):
                 first_idx[rid] = i
             if o.get("timestamp"):
                 last_ts[rid] = o["timestamp"]
-    total_ms = 0
+            m = (o.get("message") or {}).get("model")
+            if m:
+                model_of[rid] = m
     for rid, fi in first_idx.items():
         j = fi - 1
         while j >= 0 and objs[j].get("type") == "assistant":
@@ -243,8 +249,11 @@ def estimate_api_ms(objs):
         if start and end:
             d = (end - start).total_seconds()
             if d > 0:
-                total_ms += int(d * 1000)
-    return total_ms
+                yield end, int(d * 1000), model_of.get(rid)
+
+
+def estimate_api_ms(objs):
+    return sum(ms for _end, ms, _model in _iter_request_times(objs))
 
 
 # ---- LiteLLM pricing (runtime fetch + 24h disk cache) ----
@@ -450,21 +459,89 @@ def _calc_cost_from_tokens(model, usage, pricing_map):
     return cost
 
 
+def _entry_cost(o, pricing):
+    """ccusage 'Auto' mode for one assistant entry: per-entry costUSD if present,
+    else computed from tokens × per-model rates."""
+    cost = o.get("costUSD")
+    if cost is not None:
+        try:
+            return float(cost)
+        except (TypeError, ValueError):
+            pass
+    msg = o.get("message") or {}
+    return _calc_cost_from_tokens(msg.get("model"), msg.get("usage") or {}, pricing)
+
+
 def estimate_cost(objs):
     """ccusage 'Auto' mode: prefer per-entry costUSD when present, else compute from tokens."""
     pricing = _load_pricing_map()
-    total = 0.0
+    return sum(_entry_cost(o, pricing) for o in _dedupe_assistants(objs))
+
+
+def _date_of_dt(dt):
+    """Local 'YYYY-MM-DD' for a tz-aware datetime, or None."""
+    if dt is None:
+        return None
+    try:
+        return dt.astimezone().strftime("%Y-%m-%d")
+    except (ValueError, OSError):
+        return None
+
+
+def _local_date(ts):
+    return _date_of_dt(_parse_ts(ts))
+
+
+def aggregate_by_day(objs):
+    """Per-local-date totals computed from raw transcript entries.
+
+    Returns {date_str_or_None: {"utterances", "tokens", "cost_usd", "api_ms"}}.
+    Tokens/cost come from deduplicated assistant entries, utterances from
+    deduplicated human prompts, and api_ms from per-request response gaps —
+    each bucketed by the local calendar date of its own timestamp.
+    """
+    objs = list(objs)
+    pricing = _load_pricing_map()
+    days = {}
+
+    def bucket(date_key):
+        return days.setdefault(
+            date_key, {"utterances": 0, "tokens": 0, "cost_usd": 0.0, "api_ms": 0}
+        )
+
     for o in _dedupe_assistants(objs):
-        cost = o.get("costUSD")
-        if cost is not None:
-            try:
-                total += float(cost)
+        b = bucket(_local_date(o.get("timestamp")))
+        b["tokens"] += _usage_total(o)
+        b["cost_usd"] += _entry_cost(o, pricing)
+
+    seen = set()
+    for o in objs:
+        if not _is_human_prompt(o):
+            continue
+        pid = o.get("promptId")
+        if pid is not None:
+            if pid in seen:
                 continue
-            except (TypeError, ValueError):
-                pass
-        msg = o.get("message") or {}
-        total += _calc_cost_from_tokens(msg.get("model"), msg.get("usage") or {}, pricing)
-    return total
+            seen.add(pid)
+        bucket(_local_date(o.get("timestamp")))["utterances"] += 1
+
+    for end, ms, _model in _iter_request_times(objs):
+        bucket(_date_of_dt(end))["api_ms"] += ms
+
+    return days
+
+
+def aggregate_by_model(objs):
+    """Per-model deduplicated totals: {model: {"reqs", "tokens", "cost_usd"}}."""
+    pricing = _load_pricing_map()
+    out = {}
+    for o in _dedupe_assistants(objs):
+        model = (o.get("message") or {}).get("model") or "unknown"
+        b = out.setdefault(model, {"reqs": 0, "tokens": 0, "cost_usd": 0.0})
+        b["reqs"] += 1
+        b["tokens"] += _usage_total(o)
+        b["cost_usd"] += _entry_cost(o, pricing)
+    return out
 
 
 def _read_json(path):
@@ -528,6 +605,29 @@ def _dirs_for_identity(identity):
     reg = _load_registry()
     entry = (reg.get("projects") or {}).get(identity) or {}
     return [d for d in (entry.get("transcript_dirs") or []) if isinstance(d, str)]
+
+
+def project_transcript_paths(project_dir, identity=None):
+    """Every unique transcript .jsonl for a project, across renamed dirs.
+
+    Includes all transcript dirs registered under `identity` (folder renames),
+    deduplicated by session id so a session copied across dirs is read once.
+    """
+    dirs = [project_dir] if project_dir else []
+    if identity:
+        for d in _dirs_for_identity(identity):
+            if d not in dirs:
+                dirs.append(d)
+    seen = set()
+    paths = []
+    for d in dirs:
+        for tp in sorted(glob.glob(os.path.join(d, "*.jsonl"))):
+            sid = os.path.splitext(os.path.basename(tp))[0]
+            if sid in seen:
+                continue
+            seen.add(sid)
+            paths.append(tp)
+    return paths
 
 
 def _git(cwd, args):
