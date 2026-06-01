@@ -147,6 +147,20 @@ Generated 2026-05-30 12:00 · 2 sessions · 3 prompts
 > how does the session snapshot work?
 ```
 
+### 7. Help and version (run directly in terminal)
+
+```
+$ ccupp --help      # or -h
+$ ccupp --version   # or -v
+```
+
+`--help` lists every mode (the bare `ccupp` default report, `--daily`, `--model`, `--all`, `--export`, and `install`). `--version` prints the installed version:
+
+```
+$ ccupp --version
+ccupp 0.2.1
+```
+
 ## How it works
 
 ### Cumulative totals and project identity

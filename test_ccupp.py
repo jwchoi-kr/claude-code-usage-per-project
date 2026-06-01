@@ -160,6 +160,53 @@ class TestModelDispatch(unittest.TestCase):
         self.assertIn("MODELOUT", buf.getvalue())
 
 
+class TestVersionDispatch(unittest.TestCase):
+    def _run(self, argv):
+        orig = ccupp._version
+        ccupp._version = lambda: "9.9.9"
+        old_stdin, old_argv = sys.stdin, sys.argv
+        sys.stdin, sys.argv = io.StringIO(""), argv
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf):
+                ccupp.main()
+        finally:
+            sys.stdin, sys.argv = old_stdin, old_argv
+            ccupp._version = orig
+        return buf.getvalue()
+
+    def test_version_flag_prints_version(self):
+        self.assertIn("9.9.9", self._run(["ccupp", "--version"]))
+
+    def test_v_short_flag_prints_version(self):
+        self.assertIn("9.9.9", self._run(["ccupp", "-v"]))
+
+    def test_version_function_returns_version_string(self):
+        self.assertRegex(ccupp._version(), r"^\d+\.\d+")
+
+
+class TestHelpDispatch(unittest.TestCase):
+    def _run(self, argv):
+        old_stdin, old_argv = sys.stdin, sys.argv
+        sys.stdin, sys.argv = io.StringIO(""), argv
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf):
+                ccupp.main()
+        finally:
+            sys.stdin, sys.argv = old_stdin, old_argv
+        return buf.getvalue()
+
+    def test_help_flag_prints_usage(self):
+        out = self._run(["ccupp", "--help"])
+        self.assertIn("Usage", out)
+        for flag in ("--daily", "--model", "--all", "--export"):
+            self.assertIn(flag, out)
+
+    def test_h_short_flag_prints_usage(self):
+        self.assertIn("Usage", self._run(["ccupp", "-h"]))
+
+
 class TestInstall(unittest.TestCase):
     def test_install_writes_status_line(self):
         with tempfile.TemporaryDirectory() as tmp:

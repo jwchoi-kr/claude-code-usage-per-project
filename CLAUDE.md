@@ -60,7 +60,7 @@ No external dependencies for runtime or tests. The only network call is the Lite
 
 **The status line must never raise**. `ccupp_status_line.render()` always emits line 1, then wraps line-2 (project totals) rendering in `except Exception: pass` — if the status line crashes, Claude Code shows a blank line, which breaks the UI for the whole session.
 
-**The `--export`, `--all`, `--daily`, and `--model` flags are handled before the TTY check** in `main()`. Order matters — a recognized flag must short-circuit before the `sys.stdin.isatty()` branch that picks status-line vs. report.
+**The `--help`/`-h`, `--version`/`-v`, `--export`, `--all`, `--daily`, and `--model` flags are handled before the TTY check** in `main()`. Order matters — a recognized flag must short-circuit before the `sys.stdin.isatty()` branch that picks status-line vs. report. `--help`/`--version` are checked first of all (before `install`) so they always win. `_version()` reads the installed package version via `importlib.metadata`, falling back to `"unknown"` — there is no hardcoded version constant to keep in sync with `pyproject.toml`.
 
 **`--daily` buckets by *local* calendar date** (`_local_date` → `dt.astimezone()`), matching the local-time `DATE` column in the per-session report. Tests pin `TZ=UTC` + `time.tzset()` so date bucketing is deterministic regardless of the host timezone.
 
