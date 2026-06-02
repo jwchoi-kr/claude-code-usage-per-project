@@ -12,7 +12,7 @@ pip install ccupp && ccupp install
 
 ### 1. Status line (piped from Claude Code)
 
-![status-line](image.png)
+![status-line](assets/statusline.png)
 
 - **Line 1**: Model name — effort level — context-window bar (green/yellow/red at 70%/90%)
 - **Line 2**: Project name — `[N msg]` user messages sent — `[Nk tok]` tokens used — `[$N.NN]` cost — `[XhYm]` total API response time (all cumulative for the session)
