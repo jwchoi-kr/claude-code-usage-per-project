@@ -187,3 +187,7 @@ Modeled on [ccusage](https://github.com/ryoppippi/ccusage)'s approach:
 - **Time** — live sessions use `total_api_ms` from stdin. Backfill estimates by measuring the gap between each user message timestamp and the last assistant message timestamp for the same `requestId`.
 
 The per-session report and all-projects comparison read these cached snapshots. The `--daily` and `--model` breakdowns instead recompute from the raw transcripts every time (snapshots only carry session totals, not per-day or per-model splits), reusing the same deduplication and Auto-mode cost model — so their totals reconcile with the per-session report. Dates in `--daily` are bucketed by your local timezone, matching the report's local-time dates.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
