@@ -1,5 +1,4 @@
 import os
-import sys
 import json
 import shutil
 import tempfile
@@ -7,9 +6,8 @@ import unittest
 from contextlib import redirect_stdout
 import io
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import ccupp_all as allmod
-import ccupp_core as core
+from ccupp import all as allmod
+from ccupp import core
 
 
 class _Base(unittest.TestCase):

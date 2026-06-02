@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """ccupp — Claude Code usage-per-project. Entry point: dispatches by argv/TTY to each mode."""
+import json
 import os
 import sys
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-import json
 
 
 def _install():
@@ -63,28 +60,24 @@ def main():
     if argv and argv[0] == "install":
         return _install()
     if argv and argv[0] == "--export":
-        import ccupp_export
-        return ccupp_export.run(argv[1:])
+        from . import export
+        return export.run(argv[1:])
     if argv and argv[0] == "--all":
-        import ccupp_all
-        return ccupp_all.run()
+        from . import all as all_mode
+        return all_mode.run()
     if argv and argv[0] == "--daily":
-        import ccupp_daily
-        return ccupp_daily.run()
+        from . import daily
+        return daily.run()
     if argv and argv[0] == "--model":
-        import ccupp_model
-        return ccupp_model.run()
+        from . import model
+        return model.run()
     if sys.stdin.isatty():
-        import ccupp_report
-        return ccupp_report.run()
+        from . import report
+        return report.run()
     raw = sys.stdin.read()
     try:
         data = json.loads(raw)
     except (ValueError, TypeError):
         data = {}
-    import ccupp_status_line
-    print(ccupp_status_line.render(data))
-
-
-if __name__ == "__main__":
-    main()
+    from . import status_line
+    print(status_line.render(data))

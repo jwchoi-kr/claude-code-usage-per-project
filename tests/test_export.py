@@ -1,14 +1,12 @@
 import os
-import sys
 import json
 import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import ccupp_export
-import ccupp_core as core
+from ccupp import export as ccupp_export
+from ccupp import core
 
 
 def _user(text=None, content=None, pid=None, meta=False, side=False, ts=None):

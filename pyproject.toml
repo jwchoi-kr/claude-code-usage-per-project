@@ -18,16 +18,7 @@ classifiers = [
 ]
 
 [project.scripts]
-ccupp = "ccupp:main"
+ccupp = "ccupp.cli:main"
 
 [tool.setuptools]
-py-modules = [
-    "ccupp",
-    "ccupp_core",
-    "ccupp_status_line",
-    "ccupp_report",
-    "ccupp_daily",
-    "ccupp_model",
-    "ccupp_all",
-    "ccupp_export",
-]
+packages = ["ccupp"]

@@ -8,11 +8,9 @@ sorted by cost (highest first). Transcript dirs that share a project identity
 those dirs are counted once.
 """
 import os
-import sys
 import glob
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import ccupp_core as ccupp  # reuse the tested aggregation, persistence, and table renderer
+from . import core  # reuse the tested aggregation, persistence, and table renderer
 
 
 def _display_from_dir(transcript_dir):
@@ -45,7 +43,7 @@ def all_project_totals(root=None):
     empty projects omitted.
     """
     root = root or os.path.expanduser("~/.claude/projects")
-    reg = ccupp._load_registry()
+    reg = core._load_registry()
     dir_to_identity = {}
     identity_display = {}
     for ident, entry in (reg.get("projects") or {}).items():
@@ -72,7 +70,7 @@ def all_project_totals(root=None):
     for g in groups.values():
         snaps = {}
         for d in g["dirs"]:
-            ccupp._accumulate_dir_snaps(d, None, snaps)
+            core._accumulate_dir_snaps(d, None, snaps)
         agg = _aggregate_snaps(snaps)
         if not agg["sessions"]:
             continue
@@ -103,18 +101,14 @@ def render_report(root=None):
             r["name"],
             str(r["sessions"]),
             str(r["utterances"]),
-            ccupp.format_tokens(r["tokens"]),
+            core.format_tokens(r["tokens"]),
             f"${r['cost_usd']:.2f}",
-            ccupp.format_duration(r["api_ms"]),
+            core.format_duration(r["api_ms"]),
         ])
-    total = ["TOTAL", str(ts), str(tu), ccupp.format_tokens(tt),
-             f"${tc:.2f}", ccupp.format_duration(tms)]
-    return f"{title}\n\n{ccupp._box_table(headers, body, total, aligns)}"
+    total = ["TOTAL", str(ts), str(tu), core.format_tokens(tt),
+             f"${tc:.2f}", core.format_duration(tms)]
+    return f"{title}\n\n{core._box_table(headers, body, total, aligns)}"
 
 
 def run(root=None):
     print(render_report(root=root))
-
-
-if __name__ == "__main__":
-    run()

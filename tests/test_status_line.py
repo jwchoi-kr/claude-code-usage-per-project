@@ -1,13 +1,11 @@
 import os
-import sys
 import json
 import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import ccupp_status_line as sl
+from ccupp import status_line as sl
 
 
 def _assistant(rid, inp=0, cc=0, cr=0, out=0, model="claude-opus-4-7"):

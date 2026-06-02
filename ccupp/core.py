@@ -1,4 +1,4 @@
-"""ccupp_core — shared utilities, data analysis, and persistence for ccupp."""
+"""ccupp.core — shared utilities, data analysis, and persistence for ccupp."""
 import os
 import re
 import json

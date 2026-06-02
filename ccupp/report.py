@@ -1,9 +1,8 @@
-"""ccupp_report — terminal usage report for ccupp."""
+"""ccupp.report — terminal usage report for ccupp."""
 import os
-import sys
 import glob
 
-from ccupp_core import (
+from .core import (
     iter_jsonl, _parse_ts, _read_json,
     _read_or_backfill_snapshot, format_tokens, format_duration,
     project_identity, _dirs_for_identity, _box_table,
@@ -58,9 +57,8 @@ def render_report(project_dir=None, cwd=None):
     cwd = cwd or os.getcwd()
     root = os.path.expanduser("~/.claude/projects")
     if project_dir is None:
-        sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-        import ccupp_export
-        project_dir = ccupp_export.find_project_dir(cwd, root)
+        from . import export
+        project_dir = export.find_project_dir(cwd, root)
     project_name = os.path.basename(os.path.abspath(cwd).rstrip("/")) or cwd
     title = f"{project_name} — Claude Code usage (per project)"
 

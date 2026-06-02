@@ -8,8 +8,7 @@ import unittest.mock
 from contextlib import redirect_stdout
 import io
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import ccupp
+from ccupp import cli
 
 
 def _assistant(rid, inp=0, cc=0, cr=0, out=0, model="claude-opus-4-7", sidechain=False, ts=None):
@@ -52,7 +51,7 @@ class TestMain(unittest.TestCase):
         buf = io.StringIO()
         try:
             with redirect_stdout(buf):
-                ccupp.main()
+                cli.main()
         finally:
             sys.stdin = old_stdin
         return buf.getvalue()
@@ -85,7 +84,7 @@ class TestMain(unittest.TestCase):
         buf = io.StringIO()
         try:
             with redirect_stdout(buf):
-                ccupp.main()
+                cli.main()
         finally:
             sys.stdin = old_stdin
         out = buf.getvalue().rstrip("\n")
@@ -95,84 +94,84 @@ class TestMain(unittest.TestCase):
 
 class TestExportDispatch(unittest.TestCase):
     def test_export_flag_dispatches_to_run_with_remaining_args(self):
-        import ccupp_export
+        from ccupp import export
         captured = {}
-        orig = ccupp_export.run
-        ccupp_export.run = lambda argv=None: captured.__setitem__("argv", argv)
+        orig = export.run
+        export.run = lambda argv=None: captured.__setitem__("argv", argv)
         old_argv = sys.argv
         sys.argv = ["ccupp", "--export", "-o", "OUT.md"]
         try:
-            ccupp.main()
+            cli.main()
         finally:
             sys.argv = old_argv
-            ccupp_export.run = orig
+            export.run = orig
         self.assertEqual(captured["argv"], ["-o", "OUT.md"])
 
 
 class TestAllDispatch(unittest.TestCase):
     def test_all_flag_dispatches_to_ccupp_all_run(self):
-        import ccupp_all
-        orig = ccupp_all.run
-        ccupp_all.run = lambda *a, **kw: print("ALLPROJECTS")
+        from ccupp import all as allmod
+        orig = allmod.run
+        allmod.run = lambda *a, **kw: print("ALLPROJECTS")
         old_stdin, old_argv = sys.stdin, sys.argv
         sys.stdin, sys.argv = io.StringIO(""), ["ccupp", "--all"]
         buf = io.StringIO()
         try:
             with redirect_stdout(buf):
-                ccupp.main()
+                cli.main()
         finally:
             sys.stdin, sys.argv = old_stdin, old_argv
-            ccupp_all.run = orig
+            allmod.run = orig
         self.assertIn("ALLPROJECTS", buf.getvalue())
 
 
 class TestDailyDispatch(unittest.TestCase):
     def test_daily_flag_dispatches_to_ccupp_daily_run(self):
-        import ccupp_daily
-        orig = ccupp_daily.run
-        ccupp_daily.run = lambda *a, **kw: print("DAILYOUT")
+        from ccupp import daily
+        orig = daily.run
+        daily.run = lambda *a, **kw: print("DAILYOUT")
         old_stdin, old_argv = sys.stdin, sys.argv
         sys.stdin, sys.argv = io.StringIO(""), ["ccupp", "--daily"]
         buf = io.StringIO()
         try:
             with redirect_stdout(buf):
-                ccupp.main()
+                cli.main()
         finally:
             sys.stdin, sys.argv = old_stdin, old_argv
-            ccupp_daily.run = orig
+            daily.run = orig
         self.assertIn("DAILYOUT", buf.getvalue())
 
 
 class TestModelDispatch(unittest.TestCase):
     def test_model_flag_dispatches_to_ccupp_model_run(self):
-        import ccupp_model
-        orig = ccupp_model.run
-        ccupp_model.run = lambda *a, **kw: print("MODELOUT")
+        from ccupp import model
+        orig = model.run
+        model.run = lambda *a, **kw: print("MODELOUT")
         old_stdin, old_argv = sys.stdin, sys.argv
         sys.stdin, sys.argv = io.StringIO(""), ["ccupp", "--model"]
         buf = io.StringIO()
         try:
             with redirect_stdout(buf):
-                ccupp.main()
+                cli.main()
         finally:
             sys.stdin, sys.argv = old_stdin, old_argv
-            ccupp_model.run = orig
+            model.run = orig
         self.assertIn("MODELOUT", buf.getvalue())
 
 
 class TestVersionDispatch(unittest.TestCase):
     def _run(self, argv):
-        orig = ccupp._version
-        ccupp._version = lambda: "9.9.9"
+        orig = cli._version
+        cli._version = lambda: "9.9.9"
         old_stdin, old_argv = sys.stdin, sys.argv
         sys.stdin, sys.argv = io.StringIO(""), argv
         buf = io.StringIO()
         try:
             with redirect_stdout(buf):
-                ccupp.main()
+                cli.main()
         finally:
             sys.stdin, sys.argv = old_stdin, old_argv
-            ccupp._version = orig
+            cli._version = orig
         return buf.getvalue()
 
     def test_version_flag_prints_version(self):
@@ -182,7 +181,7 @@ class TestVersionDispatch(unittest.TestCase):
         self.assertIn("9.9.9", self._run(["ccupp", "-v"]))
 
     def test_version_function_returns_version_string(self):
-        self.assertRegex(ccupp._version(), r"^\d+\.\d+")
+        self.assertRegex(cli._version(), r"^\d+\.\d+")
 
 
 class TestHelpDispatch(unittest.TestCase):
@@ -192,7 +191,7 @@ class TestHelpDispatch(unittest.TestCase):
         buf = io.StringIO()
         try:
             with redirect_stdout(buf):
-                ccupp.main()
+                cli.main()
         finally:
             sys.stdin, sys.argv = old_stdin, old_argv
         return buf.getvalue()
@@ -218,7 +217,7 @@ class TestInstall(unittest.TestCase):
                 with unittest.mock.patch("os.path.expanduser", return_value=settings_path), \
                      unittest.mock.patch("shutil.which", return_value="/usr/local/bin/ccupp"), \
                      redirect_stdout(buf):
-                    ccupp.main()
+                    cli.main()
             finally:
                 sys.argv = old_argv
             with open(settings_path) as f:
@@ -239,7 +238,7 @@ class TestInstall(unittest.TestCase):
                 with unittest.mock.patch("os.path.expanduser", return_value=settings_path), \
                      unittest.mock.patch("shutil.which", return_value="/usr/local/bin/ccupp"), \
                      redirect_stdout(buf):
-                    ccupp.main()
+                    cli.main()
             finally:
                 sys.argv = old_argv
             with open(settings_path) as f:
@@ -250,7 +249,7 @@ class TestInstall(unittest.TestCase):
 
 class TestReportDispatch(unittest.TestCase):
     def test_tty_dispatches_to_report(self):
-        import ccupp_report
+        from ccupp import report
 
         class FakeIn:
             def isatty(self):
@@ -259,17 +258,17 @@ class TestReportDispatch(unittest.TestCase):
             def read(self):
                 return ""
 
-        orig = ccupp_report.run
-        ccupp_report.run = lambda *a, **kw: print("REPORTOUT")
+        orig = report.run
+        report.run = lambda *a, **kw: print("REPORTOUT")
         old_stdin, old_argv = sys.stdin, sys.argv
         sys.stdin, sys.argv = FakeIn(), ["ccupp"]
         buf = io.StringIO()
         try:
             with redirect_stdout(buf):
-                ccupp.main()
+                cli.main()
         finally:
             sys.stdin, sys.argv = old_stdin, old_argv
-            ccupp_report.run = orig
+            report.run = orig
         self.assertIn("REPORTOUT", buf.getvalue())
 
 

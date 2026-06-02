@@ -8,16 +8,14 @@ are attributed to the day each request happened. Transcript dirs sharing a git
 identity (folder renames) are merged.
 """
 import os
-import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import ccupp_core as ccupp  # reuse the tested aggregation, persistence, and table renderer
+from . import core  # reuse the tested aggregation, persistence, and table renderer
 
 
 def _collect_objs(project_dir, identity):
     objs = []
-    for tp in ccupp.project_transcript_paths(project_dir, identity):
-        objs.extend(ccupp.iter_jsonl(tp))
+    for tp in core.project_transcript_paths(project_dir, identity):
+        objs.extend(core.iter_jsonl(tp))
     return objs
 
 
@@ -25,15 +23,14 @@ def render_report(project_dir=None, cwd=None):
     cwd = cwd or os.getcwd()
     root = os.path.expanduser("~/.claude/projects")
     if project_dir is None:
-        sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-        import ccupp_export
-        project_dir = ccupp_export.find_project_dir(cwd, root)
+        from . import export
+        project_dir = export.find_project_dir(cwd, root)
     project_name = os.path.basename(os.path.abspath(cwd).rstrip("/")) or cwd
     title = f"{project_name} — Claude Code usage by day"
 
-    identity = ccupp.project_identity(cwd) if cwd else None
+    identity = core.project_identity(cwd) if cwd else None
     objs = _collect_objs(project_dir, identity) if (project_dir or identity) else []
-    days = ccupp.aggregate_by_day(objs)
+    days = core.aggregate_by_day(objs)
     days = {d: v for d, v in days.items()
             if int(v.get("utterances") or 0) or int(v.get("tokens") or 0)}
     if not days:
@@ -54,16 +51,12 @@ def render_report(project_dir=None, cwd=None):
         tt += t
         tc += c
         tms += ms
-        body.append([d or "—", str(u), ccupp.format_tokens(t),
-                     f"${c:.2f}", ccupp.format_duration(ms)])
-    total = ["TOTAL", str(tu), ccupp.format_tokens(tt),
-             f"${tc:.2f}", ccupp.format_duration(tms)]
-    return f"{title}\n\n{ccupp._box_table(headers, body, total, aligns)}"
+        body.append([d or "—", str(u), core.format_tokens(t),
+                     f"${c:.2f}", core.format_duration(ms)])
+    total = ["TOTAL", str(tu), core.format_tokens(tt),
+             f"${tc:.2f}", core.format_duration(tms)]
+    return f"{title}\n\n{core._box_table(headers, body, total, aligns)}"
 
 
 def run(project_dir=None, cwd=None):
     print(render_report(project_dir=project_dir, cwd=cwd))
-
-
-if __name__ == "__main__":
-    run()

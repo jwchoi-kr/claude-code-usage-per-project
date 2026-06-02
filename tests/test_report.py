@@ -1,5 +1,4 @@
 import os
-import sys
 import json
 import shutil
 import tempfile
@@ -8,9 +7,8 @@ from contextlib import redirect_stdout
 from unittest.mock import patch
 import io
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import ccupp_report as report
-import ccupp_core as core
+from ccupp import report
+from ccupp import core
 
 
 def _write_jsonl(path, objs):

@@ -1,5 +1,4 @@
 import os
-import sys
 import json
 import shutil
 import tempfile
@@ -9,11 +8,10 @@ from contextlib import redirect_stdout
 from unittest.mock import patch
 import io
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import ccupp_daily as daily
-import ccupp_core as core
+from ccupp import daily
+from ccupp import core
 # Reuse shared fixtures (functions/mixins, not TestCase classes — so they aren't re-collected).
-from test_ccupp_core import _assistant, _write_jsonl, _PricingIsolation
+from tests.test_core import _assistant, _write_jsonl, _PricingIsolation
 
 
 class _Base(unittest.TestCase, _PricingIsolation):
@@ -101,7 +99,7 @@ class TestCrossDir(unittest.TestCase, _PricingIsolation):
         ])
         core._register_dir("commit:p1", self.dirA)
         core._register_dir("commit:p1", self.dirB)
-        with patch.object(daily.ccupp, "project_identity", return_value="commit:p1"):
+        with patch.object(daily.core, "project_identity", return_value="commit:p1"):
             out = daily.render_report(project_dir=self.dirB, cwd=self.dirB)
         self.assertIn("2026-02-01", out)
 

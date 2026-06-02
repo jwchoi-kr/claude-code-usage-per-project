@@ -1,5 +1,4 @@
 import os
-import sys
 import json
 import shutil
 import tempfile
@@ -7,8 +6,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import ccupp_core as core
+from ccupp import core
 
 
 class _CcuppHomeIsolation:

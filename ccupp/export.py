@@ -9,13 +9,11 @@ them to PROMPTS.md ordered earliest-session-first, earliest-prompt-first within 
 """
 import os
 import re
-import sys
 import glob
 import argparse
 from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import ccupp_core as ccupp  # reuse the tested, robust JSONL reader + timestamp parser
+from . import core  # reuse the tested, robust JSONL reader + timestamp parser
 
 # UI / session-control slash commands carry no task intent → drop them.
 # Work directives and skills (e.g. /goal, /brainstorm, /review) are kept.
@@ -129,7 +127,7 @@ def find_project_dir(cwd, projects_root):
         if not os.path.isdir(d):
             continue
         for tp in glob.glob(os.path.join(d, "*.jsonl")):
-            for o in ccupp.iter_jsonl(tp):
+            for o in core.iter_jsonl(tp):
                 c = o.get("cwd")
                 if c:
                     if os.path.abspath(c) == target:
@@ -140,7 +138,7 @@ def find_project_dir(cwd, projects_root):
 
 
 def session_summary(transcript_path):
-    objs = list(ccupp.iter_jsonl(transcript_path))
+    objs = list(core.iter_jsonl(transcript_path))
     first_ts = None
     sid = None
     for o in objs:
@@ -166,7 +164,7 @@ def build_sessions(project_dir, identity=None):
     """
     dirs = [project_dir] if project_dir else []
     if identity:
-        for d in ccupp._dirs_for_identity(identity):
+        for d in core._dirs_for_identity(identity):
             if d not in dirs:
                 dirs.append(d)
     sums = []
@@ -183,7 +181,7 @@ def build_sessions(project_dir, identity=None):
 
 
 def _fmt_ts(ts):
-    d = ccupp._parse_ts(ts)
+    d = core._parse_ts(ts)
     if not d:
         return "?"
     return d.astimezone().strftime("%Y-%m-%d %H:%M")
@@ -216,7 +214,7 @@ def render_markdown(project_name, sessions, now_str):
 def export(cwd, projects_root, out_path=None):
     project_dir = find_project_dir(cwd, projects_root)
     project_name = os.path.basename(os.path.abspath(cwd).rstrip("/")) or os.path.abspath(cwd)
-    identity = ccupp.project_identity(cwd)
+    identity = core.project_identity(cwd)
     sessions = build_sessions(project_dir, identity=identity) if (project_dir or identity) else []
     md = render_markdown(project_name, sessions, datetime.now().strftime("%Y-%m-%d %H:%M"))
     out_path = out_path or os.path.join(cwd, "PROMPTS.md")
@@ -241,7 +239,3 @@ def run(argv=None):
         print(f"No user prompts found for this folder.\n  (searched: {projects_root})")
     else:
         print(f"✅ {out}\n   {n_sessions} sessions · {n_prompts} prompts")
-
-
-if __name__ == "__main__":
-    run(sys.argv[1:])

@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """ccupp status line — renders the 2-line HUD from Claude Code's statusLine stdin JSON."""
 import os
-import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ccupp_core import project_totals, format_tokens, format_duration
+from .core import project_totals, format_tokens, format_duration
 
 
 DIM = "\033[2m"
