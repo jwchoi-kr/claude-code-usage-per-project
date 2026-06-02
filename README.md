@@ -12,10 +12,7 @@ pip install ccupp && ccupp install
 
 ### 1. Status line (piped from Claude Code)
 
-```
-Opus 4.7  [xhigh]   ctx ███░░░░░░░ 38%
-myproject  [12 msg]  [84.2k tok]  [$1.83]  [6m12s]
-```
+![status-line](image.png)
 
 - **Line 1**: Model name — effort level — context-window bar (green/yellow/red at 70%/90%)
 - **Line 2**: Project name — `[N msg]` user messages sent — `[Nk tok]` tokens used — `[$N.NN]` cost — `[XhYm]` total API response time (all cumulative for the session)
